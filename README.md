@@ -1,6 +1,10 @@
-﻿# openclawskills
+# openclawskills
 
 Personal OpenClaw skills repository.
+
+中文说明见：
+
+- [README.zh-CN.md](README.zh-CN.md)
 
 ## Included Skills
 
