@@ -15,6 +15,7 @@ Use this skill when the user wants to:
 - preview the latest full post bodies from all monitored accounts
 - pause or resume X monitoring
 - receive bilingual post notifications
+- optionally archive pushed tweets into a Feishu Bitable for later review
 
 ## Canonical Input Rule
 
@@ -102,6 +103,18 @@ Switch the delivery target:
 python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-delivery-channel feishu --set-delivery-target ou_xxx
 ```
 
+Limit each account to at most 3 new posts per run:
+
+```bash
+python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-poll-limit 3 --set-max-new-per-account 3
+```
+
+Switch between one-by-one delivery and one digest table per run:
+
+```bash
+python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-push-mode detail
+```
+
 ## Behavioral Rules
 
 - Use SocialData as the only X data source.
@@ -110,6 +123,9 @@ python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-de
 - Prefer exact handles when adding accounts. Common names are only aliases, not canonical identifiers.
 - Bilingual notifications should keep the original post text and add a translated section.
 - Quote tweets and retweets should preserve the referenced original content when available.
+- To avoid message floods, each account should only deliver a small capped batch per run.
+- `PUSH_MODE=detail` sends one detailed message per tweet, including summary, original text, translation, and any repost/quote content.
+- If `FEISHU_BITABLE_APP_TOKEN` is configured, delivered tweets may also be appended to a Feishu Bitable table. `FEISHU_BITABLE_TABLE_ID` is optional when the Base contains only one table.
 - When the user asks for a test run or asks to see recent monitored content, prefer full post previews rather than headline-only summaries.
 - Never print or export the SocialData API key.
 - Never package `/etc/openclaw/x-monitor.env` with the skill export.

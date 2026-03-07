@@ -8,6 +8,11 @@ Current implementation assumptions:
 - Tweets endpoint works with:
   - `/twitter/user/<user_id>/tweets?limit=<n>`
 
+Practical caution:
+
+- The local script passes `limit`, but SocialData documentation can lag or diverge from observed behavior.
+- Always verify the real returned batch size during live testing instead of assuming the upstream endpoint enforces the requested limit.
+
 Observed useful fields in tweet payloads:
 
 - `id_str`

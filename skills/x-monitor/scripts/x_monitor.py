@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -13,15 +14,35 @@ from urllib.request import Request, urlopen
 
 SOCIALDATA_BASE = "https://api.socialdata.tools/twitter"
 TRANSLATE_BASE = "https://translate.googleapis.com/translate_a/single"
+FEISHU_BASE = "https://open.feishu.cn/open-apis"
 ENV_PATH = Path("/etc/openclaw/x-monitor.env")
 STATE_PATH = Path("/var/lib/openclaw/x-monitor/state.json")
+OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
 WATCH_TIMER = "openclaw-x-monitor.timer"
 DEFAULT_ENV = {
     "DELIVERY_CHANNEL": "feishu",
-    "POLL_LIMIT": "5",
+    "POLL_LIMIT": "3",
+    "MAX_NEW_PER_ACCOUNT": "3",
+    "PUSH_MODE": "detail",
     "TRANSLATE_ENABLED": "true",
 }
 UA = "Mozilla/5.0 (compatible; OpenClaw X Monitor/1.0; +https://docs.socialdata.tools/)"
+TRANSLATE_AGENT_ID = "main"
+BITABLE_FIELDS = (
+    "Tweet ID",
+    "Account Name",
+    "Screen Name",
+    "Alias",
+    "Type",
+    "Created At",
+    "Tweet URL",
+    "Main Text",
+    "Referenced Author",
+    "Referenced URL",
+    "Referenced Text",
+    "Recorded At",
+    "Data Source",
+)
 
 
 def load_env_file(path: Path) -> None:
@@ -94,6 +115,8 @@ def request_text(
     url: str,
     *,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    data: bytes | None = None,
     retries: int = 3,
     timeout: int = 30,
 ) -> str:
@@ -105,7 +128,7 @@ def request_text(
         merged_headers.update(headers)
     last_error: Exception | None = None
     for attempt in range(1, retries + 1):
-        req = Request(url, headers=merged_headers)
+        req = Request(url, headers=merged_headers, data=data, method=method)
         try:
             with urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode("utf-8", errors="replace")
@@ -121,10 +144,24 @@ def request_json(
     url: str,
     *,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    payload: Any = None,
     retries: int = 3,
     timeout: int = 30,
 ) -> Any:
-    return json.loads(request_text(url, headers=headers, retries=retries, timeout=timeout))
+    data: bytes | None = None
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return json.loads(
+        request_text(
+            url,
+            headers=headers,
+            method=method,
+            data=data,
+            retries=retries,
+            timeout=timeout,
+        )
+    )
 
 
 def socialdata_headers(apikey: str) -> dict[str, str]:
@@ -188,6 +225,19 @@ def read_state() -> dict[str, Any]:
 def write_state(state: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_openclaw_feishu_account() -> dict[str, str]:
+    if not OPENCLAW_CONFIG_PATH.exists():
+        return {}
+    config = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
+    feishu = config.get("channels", {}).get("feishu", {})
+    main = feishu.get("accounts", {}).get("main", {})
+    app_id = str(main.get("appId", "")).strip()
+    app_secret = str(main.get("appSecret", "")).strip()
+    if not app_id or not app_secret:
+        return {}
+    return {"app_id": app_id, "app_secret": app_secret}
 
 
 def find_account(state: dict[str, Any], identifier: str) -> dict[str, Any] | None:
@@ -260,6 +310,19 @@ def truncate_text(text: str, limit: int = 1200) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
+def parse_int_env(env_map: dict[str, str], key: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    raw = str(env_map.get(key, default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{key} must be an integer") from exc
+    if value < minimum:
+        raise SystemExit(f"{key} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise SystemExit(f"{key} must be <= {maximum}")
+    return value
+
+
 def format_text_block(label: str, text: str, lang: str | None, translate_enabled: bool) -> list[str]:
     value = truncate_text(text)
     if not value:
@@ -280,6 +343,314 @@ def classify_tweet(tweet: dict[str, Any]) -> str:
     if tweet.get("in_reply_to_status_id_str"):
         return "reply"
     return "tweet"
+
+
+def tweet_text(tweet: dict[str, Any]) -> str:
+    return truncate_text(tweet.get("full_text") or tweet.get("text") or "", 4000)
+
+
+def referenced_tweet_context(tweet: dict[str, Any]) -> tuple[str, str, str]:
+    if tweet.get("retweeted_status"):
+        referenced = tweet["retweeted_status"]
+        author = referenced.get("user", {})
+        author_label = f"{author.get('name', '')} (@{author.get('screen_name', '')})".strip()
+        link = (
+            f"https://x.com/{author.get('screen_name')}/status/"
+            f"{referenced.get('id_str') or referenced.get('id')}"
+        )
+        return (author_label, link, tweet_text(referenced))
+    if tweet.get("quoted_status"):
+        referenced = tweet["quoted_status"]
+        author = referenced.get("user", {})
+        author_label = f"{author.get('name', '')} (@{author.get('screen_name', '')})".strip()
+        link = (
+            f"https://x.com/{author.get('screen_name')}/status/"
+            f"{referenced.get('id_str') or referenced.get('id')}"
+        )
+        return (author_label, link, tweet_text(referenced))
+    return ("", "", "")
+
+
+def summarise_overflow(account: dict[str, Any], skipped_count: int, delivered_count: int, newest_id: str) -> str:
+    return "\n".join([
+        "【X 监控】发现新帖过多，已限流推送",
+        f"账号：{account['name']} (@{account['screen_name']})",
+        f"本轮新帖：{skipped_count + delivered_count}",
+        f"已推送：最新 {delivered_count} 条",
+        f"已跳过：较早的 {skipped_count} 条",
+        f"最新帖子 ID：{newest_id}",
+        "",
+        "说明：为了控制单账号单轮消息量，系统会只发送最新几条。",
+    ]).strip()
+
+
+def compact_time(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    try:
+        normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%m-%d %H:%M")
+    except ValueError:
+        pass
+    if len(text) >= 16 and "T" in text:
+        return text[5:16].replace("T", " ")
+    if len(text) >= 16 and " " in text:
+        return text[5:16]
+    return text[:16]
+
+
+def type_label(tweet_type: str) -> str:
+    return {
+        "tweet": "原创",
+        "quote": "引用",
+        "repost": "转发",
+        "reply": "回复",
+    }.get(tweet_type, tweet_type)
+
+
+def compact_summary_text(tweet: dict[str, Any]) -> str:
+    source = tweet
+    if tweet.get("retweeted_status"):
+        source = tweet["retweeted_status"]
+    text = tweet_text(source)
+    text = re.sub(r"\s+", " ", text).strip()
+    return truncate_text(text, 48) or "-"
+
+
+def normalize_text_block(text: str) -> str:
+    value = (text or "").strip()
+    value = re.sub(r"(?:\s+https?://\S+)+\s*$", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def fallback_translate_to_chinese(text: str, enabled: bool) -> str:
+    value = normalize_text_block(text)
+    if not value:
+        return ""
+    if is_chinese_text(value):
+        return value
+    if not enabled:
+        return value
+    return translate_text(value, "zh-CN", True) or value
+
+
+def digest_main_text(tweet: dict[str, Any]) -> str:
+    if tweet.get("retweeted_status"):
+        return ""
+    return normalize_text_block(tweet_text(tweet))
+
+
+def digest_referenced_text(tweet: dict[str, Any]) -> str:
+    if tweet.get("retweeted_status"):
+        return normalize_text_block(tweet_text(tweet["retweeted_status"]))
+    if tweet.get("quoted_status"):
+        return normalize_text_block(tweet_text(tweet["quoted_status"]))
+    return ""
+
+
+def digest_summary_source(tweet: dict[str, Any]) -> str:
+    main_text = digest_main_text(tweet)
+    referenced_text = digest_referenced_text(tweet)
+    parts: list[str] = []
+    if main_text:
+        parts.append(f"post: {main_text}")
+    if referenced_text:
+        parts.append(f"referenced: {referenced_text}")
+    if parts:
+        return "\n".join(parts)
+    return normalize_text_block(tweet_text(tweet))
+
+
+def parse_json_object(text: str) -> Any:
+    value = (text or "").strip()
+    if not value:
+        raise ValueError("empty model response")
+    candidates = [value]
+    fenced = re.search(r"```(?:json)?\s*(\{.*\}|\[.*\])\s*```", value, flags=re.DOTALL)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
+    start = min([idx for idx in [value.find("{"), value.find("[")] if idx != -1], default=-1)
+    end = max(value.rfind("}"), value.rfind("]"))
+    if start != -1 and end != -1 and end > start:
+        candidates.append(value[start:end + 1])
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception as exc:
+            last_error = exc
+    raise ValueError(f"failed to parse model JSON: {last_error}")
+
+
+def run_lobster_json(prompt: str, timeout_seconds: int = 120) -> Any:
+    proc = run_command([
+        "openclaw",
+        "--no-color",
+        "agent",
+        "--agent",
+        TRANSLATE_AGENT_ID,
+        "--message",
+        prompt,
+        "--thinking",
+        "off",
+        "--timeout",
+        str(timeout_seconds),
+        "--json",
+    ])
+    payload = json.loads(proc.stdout)
+    texts = [
+        item.get("text", "")
+        for item in payload.get("result", {}).get("payloads", [])
+        if isinstance(item, dict)
+    ]
+    return parse_json_object("\n".join(texts).strip())
+
+
+def lobster_enrich_rows(rows: list[dict[str, str]], translate_enabled: bool) -> list[dict[str, str]]:
+    if not rows:
+        return rows
+    model_map: dict[str, dict[str, str]] = {}
+    if translate_enabled:
+        prompt = (
+            "\u4f60\u662f X \u5e16\u5b50\u76d1\u63a7\u52a9\u624b\u3002\u4f60\u8981\u5bf9\u6bcf\u6761\u5e16\u5b50\u505a\u4e24\u4ef6\u4e8b\uff1a"
+            "\u7528\u81ea\u7136\u4e2d\u6587\u603b\u7ed3\u8fd9\u6761\u5e16\u5b50\u5728\u8bf4\u4ec0\u4e48\uff0c\u5e76\u7ffb\u8bd1\u9700\u8981\u663e\u793a\u7684\u82f1\u6587\u5185\u5bb9\u3002\n"
+            "\u89c4\u5219\uff1a\n"
+            "1. \u53ea\u8fd4\u56de JSON\uff0c\u4e0d\u8981\u89e3\u91ca\uff0c\u4e0d\u8981 markdown\u3002\n"
+            "2. summary \u662f 32-80 \u5b57\u7684\u4e2d\u6587\u5185\u5bb9\u6458\u8981\uff0c\u8981\u50cf\u4eba\u5199\u7684\u4fe1\u606f\u6458\u8981\uff0c"
+            "\u8981\u62bd\u53d6\u4e3b\u65e8\u3001\u884c\u4e3a\u548c\u610f\u56fe\uff0c\u4e0d\u8981\u590d\u8ff0\u88c5\u9970\u6027 emoji\u3001\u611f\u53f9\u8bcd\u6216\u65e0\u5173\u7ec6\u8282\u3002\n"
+            "3. \u5bf9 repost\uff08\u8f6c\u53d1\uff09\uff0csummary \u8981\u603b\u7ed3\u88ab\u8f6c\u53d1\u5185\u5bb9\u5728\u8bf4\u4ec0\u4e48\uff0c"
+            "\u4ee5\u53ca\u53d1\u5e16\u4eba\u5728\u4f20\u8fbe/\u653e\u5927\u4ec0\u4e48\u4fe1\u606f\uff1b\u4e0d\u8981\u5199\u201c\u5e26\u4e86\u67d0\u4e2a emoji\u201d\u8fd9\u79cd\u4f4e\u4ef7\u503c\u5185\u5bb9\u3002\n"
+            "4. \u5bf9 quote\uff08\u5f15\u7528\uff09\uff0csummary \u8981\u540c\u65f6\u6982\u62ec\u4ed6\u7684\u8bc4\u8bba\u548c\u88ab\u5f15\u7528\u7684\u5185\u5bb9\u3002\n"
+            "5. main_translation \u548c referenced_translation \u90fd\u8981\u662f\u81ea\u7136\u7b80\u4f53\u4e2d\u6587\uff0c"
+            "\u5bf9\u6781\u77ed\u53e3\u53f7\u3001\u7b80\u77ed\u8868\u8fbe\u8981\u610f\u8bd1\uff0c\u4e0d\u8981\u751f\u786c\u76f4\u8bd1\u3002\n"
+            "6. \u5982\u679c\u67d0\u9879\u6ca1\u6709\u5185\u5bb9\uff0c\u5bf9\u5e94\u5b57\u6bb5\u8fd4\u56de\u7a7a\u5b57\u7b26\u4e32\u3002\n"
+            "7. \u8fd4\u56de\u683c\u5f0f\uff1a"
+            "{\"items\":[{\"id\":\"...\",\"summary\":\"...\",\"main_translation\":\"...\",\"referenced_translation\":\"...\"}]}\n"
+            "\u8f93\u5165 JSON\uff1a\n"
+            f"{json.dumps(rows, ensure_ascii=False)}"
+        )
+        try:
+            result = run_lobster_json(prompt, timeout_seconds=180)
+            items = result.get("items", []) if isinstance(result, dict) else result
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get('id', '')).strip()
+                    if not key:
+                        continue
+                    model_map[key] = {
+                        "summary": str(item.get("summary", "")).strip(),
+                        "main_translation": str(item.get("main_translation", "")).strip(),
+                        "referenced_translation": str(item.get("referenced_translation", "")).strip(),
+                    }
+        except Exception:
+            model_map = {}
+    for row in rows:
+        enriched = model_map.get(row["tweet_id"], {})
+        fallback_summary = fallback_translate_to_chinese(row["summary_source"], translate_enabled)
+        row["summary"] = enriched.get("summary", "") or truncate_text(fallback_summary, 96)
+        row["main_translation"] = enriched.get("main_translation", "") or fallback_translate_to_chinese(row["main_text"], translate_enabled)
+        row["referenced_translation"] = enriched.get("referenced_translation", "") or fallback_translate_to_chinese(row["referenced_text"], translate_enabled)
+    return rows
+
+
+def format_detailed_notification(row: dict[str, str]) -> str:
+    row_type = row["type"]
+    lines = [
+        f"{row['account_name']} {row['type_label']}",
+        f"\u65f6\u95f4\uff1a{row['created_at']}",
+        "",
+        "\u5185\u5bb9\u6458\u8981\uff1a",
+        row["summary"] or "-",
+    ]
+    if row_type in {"tweet", "reply"}:
+        lines.extend([
+            "",
+            "\u539f\u6587\uff1a",
+            row["main_text"] or "-",
+            "",
+            row["main_translation"] or "-",
+        ])
+    elif row_type == "repost":
+        lines.extend([
+            "",
+            "\u539f\u6587\uff1a",
+            row["referenced_text"] or "-",
+            "",
+            row["referenced_translation"] or "-",
+        ])
+    elif row_type == "quote":
+        lines.extend([
+            "",
+            "\u4ed6\u7684\u8bc4\u8bba\u539f\u6587\uff1a",
+            row["main_text"] or "-",
+            "",
+            row["main_translation"] or "-",
+            "",
+            "\u5f15\u7528\u5185\u5bb9\u539f\u6587\uff1a",
+            row["referenced_text"] or "-",
+            "",
+            row["referenced_translation"] or "-",
+        ])
+    return "\n".join(lines).strip()
+
+
+def table_cell(text: str) -> str:
+    value = normalize_text_block(text)
+    if not value:
+        return "-"
+    return value.replace("|", "/")
+
+
+def format_grouped_digest_table(
+    rows: list[dict[str, str]],
+    overflow_rows: list[dict[str, str]],
+) -> str:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    account_labels: dict[str, str] = {}
+    for row in rows:
+        key = row["screen_name"]
+        grouped.setdefault(key, []).append(row)
+        account_labels[key] = f"{row['account_name']} (@{row['screen_name']})"
+    lines = [
+        "\u3010X \u76d1\u63a7\u3011\u6309\u8d26\u53f7\u5206\u7ec4\u6c47\u603b",
+        f"\u65f6\u95f4\uff1a{local_timestamp()}",
+        f"\u8d26\u53f7\u6570\uff1a{len(grouped)}",
+        f"\u65b0\u5e16\u6570\uff1a{len(rows)}",
+        "",
+        "\u8bf4\u660e\uff1a\u6bcf\u4e2a\u8d26\u53f7\u53ea\u4fdd\u7559\u6700\u65b0 3 \u6761\uff0c\u5185\u5bb9\u6309\u4f60\u8981\u7684\u5b57\u6bb5\u8f93\u51fa\u3002",
+    ]
+    for screen_name, items in grouped.items():
+        lines.extend([
+            "",
+            f"\u8d26\u53f7\uff1a{account_labels[screen_name]}",
+            "\u5e8f\u53f7 | \u65f6\u95f4 | \u4e00\u53e5\u8bdd\u7b80\u4ecb | \u539f\u6587\uff08\u82f1\u8bed\uff09 | \u4e2d\u6587\u7ffb\u8bd1 | \u8f6c\u53d1\u5185\u5bb9 | \u8f6c\u53d1\u5185\u5bb9\u4e2d\u6587",
+            "--- | --- | --- | --- | --- | --- | ---",
+        ])
+        for index, item in enumerate(items, start=1):
+            lines.append(
+                " | ".join([
+                    str(index),
+                    table_cell(item["created_at"]),
+                    table_cell(item["summary"]),
+                    table_cell(item["main_text"]),
+                    table_cell(item["main_translation"]),
+                    table_cell(item["referenced_text"]),
+                    table_cell(item["referenced_translation"]),
+                ])
+            )
+        note = next((entry for entry in overflow_rows if entry["screen_name"] == screen_name), None)
+        if note:
+            lines.append(
+                f"\u5907\u6ce8\uff1a\u672c\u8f6e\u53d1\u73b0 {note['total']} \u6761\uff0c\u4ec5\u5c55\u793a\u6700\u65b0 {note['shown']} \u6761\uff0c"
+                f"\u8df3\u8fc7 {note['skipped']} \u6761\u3002"
+            )
+    return "\n".join(lines).strip()
 
 
 def format_notification(tweet: dict[str, Any], account: dict[str, Any], translate_enabled: bool) -> str:
@@ -378,6 +749,134 @@ def push_text(text: str, env_map: dict[str, str]) -> None:
     ])
 
 
+class FeishuBitableClient:
+    def __init__(self, app_id: str, app_secret: str, app_token: str, table_id: str | None = None) -> None:
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.app_token = app_token
+        self.table_id = table_id or ""
+        self._tenant_access_token = ""
+        self._token_expiry = 0.0
+        self._fields_ready = False
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.tenant_access_token()}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
+    def tenant_access_token(self) -> str:
+        now = time.time()
+        if self._tenant_access_token and now < self._token_expiry - 60:
+            return self._tenant_access_token
+        payload = {
+            "app_id": self.app_id,
+            "app_secret": self.app_secret,
+        }
+        data = request_json(
+            f"{FEISHU_BASE}/auth/v3/tenant_access_token/internal",
+            method="POST",
+            payload=payload,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            retries=2,
+            timeout=20,
+        )
+        if data.get("code") != 0:
+            raise RuntimeError(f"failed to get Feishu tenant token: {data}")
+        self._tenant_access_token = str(data.get("tenant_access_token", "")).strip()
+        self._token_expiry = now + int(data.get("expire", 7200))
+        if not self._tenant_access_token:
+            raise RuntimeError("Feishu tenant token missing in auth response")
+        return self._tenant_access_token
+
+    def ensure_fields(self) -> None:
+        self.ensure_table_id()
+        if self._fields_ready:
+            return
+        data = request_json(
+            f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/fields?page_size=500",
+            headers=self._auth_headers(),
+            timeout=20,
+        )
+        if data.get("code") != 0:
+            raise RuntimeError(f"failed to list Feishu Bitable fields: {data}")
+        existing = {
+            str(item.get("field_name", "")).strip()
+            for item in data.get("data", {}).get("items", [])
+            if item.get("field_name")
+        }
+        for field_name in BITABLE_FIELDS:
+            if field_name in existing:
+                continue
+            created = request_json(
+                f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/fields",
+                method="POST",
+                payload={
+                    "field_name": field_name,
+                    "type": 1,
+                },
+                headers=self._auth_headers(),
+                timeout=20,
+            )
+            if created.get("code") != 0:
+                raise RuntimeError(f"failed to create Feishu Bitable field '{field_name}': {created}")
+        self._fields_ready = True
+
+    def ensure_table_id(self) -> str:
+        if self.table_id:
+            return self.table_id
+        data = request_json(
+            f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables?page_size=200",
+            headers=self._auth_headers(),
+            timeout=20,
+        )
+        if data.get("code") != 0:
+            raise RuntimeError(f"failed to list Feishu Bitable tables: {data}")
+        items = data.get("data", {}).get("items", [])
+        if len(items) == 1:
+            self.table_id = str(items[0].get("table_id", "")).strip()
+            if not self.table_id:
+                raise RuntimeError(f"Feishu Bitable returned a table without table_id: {data}")
+            return self.table_id
+        if not items:
+            raise RuntimeError("Feishu Bitable has no tables; create one table first")
+        names = [str(item.get("name", "")).strip() for item in items]
+        raise RuntimeError(
+            "FEISHU_BITABLE_TABLE_ID is required when multiple tables exist. "
+            f"Available tables: {names}"
+        )
+
+    def append_tweet(self, tweet: dict[str, Any], account: dict[str, Any]) -> None:
+        self.ensure_fields()
+        referenced_author, referenced_url, referenced_text = referenced_tweet_context(tweet)
+        payload = {
+            "fields": {
+                "Tweet ID": str(tweet.get("id_str") or tweet.get("id") or ""),
+                "Account Name": account.get("name", ""),
+                "Screen Name": account.get("screen_name", ""),
+                "Alias": account.get("alias", ""),
+                "Type": classify_tweet(tweet),
+                "Created At": str(tweet.get("tweet_created_at", "")),
+                "Tweet URL": f"https://x.com/{account['screen_name']}/status/{tweet['id_str']}",
+                "Main Text": tweet_text(tweet),
+                "Referenced Author": referenced_author,
+                "Referenced URL": referenced_url,
+                "Referenced Text": referenced_text,
+                "Recorded At": local_timestamp(),
+                "Data Source": "SocialData",
+            }
+        }
+        data = request_json(
+            f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/records",
+            method="POST",
+            payload=payload,
+            headers=self._auth_headers(),
+            timeout=20,
+        )
+        if data.get("code") != 0:
+            raise RuntimeError(f"failed to append Feishu Bitable record: {data}")
+
+
 def sort_tweets_ascending(tweets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(tweets, key=lambda item: int(item.get("id_str") or item.get("id") or 0))
 
@@ -391,6 +890,22 @@ def newest_tweet_id(tweets: list[dict[str, Any]]) -> str:
         return ""
     newest = max(tweets, key=lambda item: int(item.get("id_str") or item.get("id") or 0))
     return str(newest.get("id_str") or newest.get("id") or "")
+
+
+def bitable_client_from_env(env_map: dict[str, str]) -> FeishuBitableClient | None:
+    app_token = env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()
+    table_id = env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()
+    if not app_token:
+        return None
+    app_id = env_map.get("FEISHU_APP_ID", "").strip()
+    app_secret = env_map.get("FEISHU_APP_SECRET", "").strip()
+    if not app_id or not app_secret:
+        creds = load_openclaw_feishu_account()
+        app_id = creds.get("app_id", "")
+        app_secret = creds.get("app_secret", "")
+    if not app_id or not app_secret:
+        raise RuntimeError("Feishu Bitable is configured but app credentials are unavailable")
+    return FeishuBitableClient(app_id, app_secret, app_token, table_id)
 
 
 def add_account(state: dict[str, Any], apikey: str, identifier: str, alias: str | None, poll_limit: int) -> dict[str, Any]:
@@ -456,9 +971,13 @@ def public_config(env_map: dict[str, str]) -> dict[str, Any]:
     return {
         "delivery_channel": env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]),
         "delivery_target": env_map.get("DELIVERY_TARGET", ""),
-        "poll_limit": int(env_map.get("POLL_LIMIT", DEFAULT_ENV["POLL_LIMIT"])),
+        "poll_limit": parse_int_env(env_map, "POLL_LIMIT", int(DEFAULT_ENV["POLL_LIMIT"]), minimum=1, maximum=20),
+        "max_new_per_account": parse_int_env(env_map, "MAX_NEW_PER_ACCOUNT", int(DEFAULT_ENV["MAX_NEW_PER_ACCOUNT"]), minimum=1, maximum=20),
+        "push_mode": env_map.get("PUSH_MODE", DEFAULT_ENV["PUSH_MODE"]).strip(),
         "translate_enabled": env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true",
         "api_key_configured": bool(env_map.get("SOCIALDATA_API_KEY", "")),
+        "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
+        "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
     }
 
 
@@ -542,6 +1061,8 @@ def set_config(
     delivery_channel: str | None,
     delivery_target: str | None,
     poll_limit: int | None,
+    max_new_per_account: int | None,
+    push_mode: str | None,
     translate_enabled: str | None,
 ) -> dict[str, Any]:
     changed = False
@@ -556,6 +1077,17 @@ def set_config(
             raise SystemExit("POLL_LIMIT must be between 1 and 20")
         env_map["POLL_LIMIT"] = str(poll_limit)
         changed = True
+    if max_new_per_account is not None:
+        if max_new_per_account < 1 or max_new_per_account > 20:
+            raise SystemExit("MAX_NEW_PER_ACCOUNT must be between 1 and 20")
+        env_map["MAX_NEW_PER_ACCOUNT"] = str(max_new_per_account)
+        changed = True
+    if push_mode is not None:
+        normalized = push_mode.strip().lower()
+        if normalized not in {"detail", "table"}:
+            raise SystemExit("PUSH_MODE must be detail or table")
+        env_map["PUSH_MODE"] = normalized
+        changed = True
     if translate_enabled is not None:
         normalized = translate_enabled.strip().lower()
         if normalized not in {"true", "false"}:
@@ -569,9 +1101,21 @@ def set_config(
 
 
 def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) -> dict[str, Any]:
-    poll_limit = int(env_map.get("POLL_LIMIT", DEFAULT_ENV["POLL_LIMIT"]))
+    poll_limit = parse_int_env(env_map, "POLL_LIMIT", int(DEFAULT_ENV["POLL_LIMIT"]), minimum=1, maximum=20)
+    max_new_per_account = parse_int_env(
+        env_map,
+        "MAX_NEW_PER_ACCOUNT",
+        int(DEFAULT_ENV["MAX_NEW_PER_ACCOUNT"]),
+        minimum=1,
+        maximum=20,
+    )
+    push_mode = env_map.get("PUSH_MODE", DEFAULT_ENV["PUSH_MODE"]).strip().lower()
     translate_enabled = env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true"
+    bitable_client = bitable_client_from_env(env_map)
     delivered: list[dict[str, Any]] = []
+    bitable_errors: list[dict[str, str]] = []
+    overflow_rows: list[dict[str, str]] = []
+    grouped_rows: list[dict[str, str]] = []
     for account in state.get("accounts", []):
         if not account.get("enabled", True):
             continue
@@ -584,22 +1128,84 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
             item for item in sort_tweets_ascending(tweets)
             if int(item.get("id_str") or item.get("id") or 0) > latest_seen
         ]
-        for tweet in new_tweets:
-            push_text(format_notification(tweet, account, translate_enabled), env_map)
-            account["last_seen_id"] = str(tweet.get("id_str") or tweet.get("id") or account.get("last_seen_id", ""))
+        deliver_tweets = sort_tweets_descending(new_tweets)[:max_new_per_account]
+        skipped_count = max(0, len(new_tweets) - len(deliver_tweets))
+        newest_id = newest_tweet_id(tweets) or account.get("last_seen_id", "")
+        if skipped_count:
+            overflow_rows.append({
+                "account_name": account.get("name", ""),
+                "screen_name": account.get("screen_name", ""),
+                "total": str(len(new_tweets)),
+                "shown": str(len(deliver_tweets)),
+                "skipped": str(skipped_count),
+            })
+        for tweet in deliver_tweets:
+            url = f"https://x.com/{account['screen_name']}/status/{tweet['id_str']}"
+            if bitable_client is not None:
+                try:
+                    bitable_client.append_tweet(tweet, account)
+                except Exception as exc:
+                    bitable_errors.append({
+                        "screen_name": account.get("screen_name", ""),
+                        "tweet_id": str(tweet.get("id_str") or tweet.get("id") or ""),
+                        "error": str(exc),
+                    })
             delivered.append({
+                "account_name": account.get("name", ""),
                 "screen_name": account.get("screen_name", ""),
                 "tweet_id": str(tweet.get("id_str") or tweet.get("id") or ""),
                 "type": classify_tweet(tweet),
+                "type_label": type_label(classify_tweet(tweet)),
+                "created_at": compact_time(str(tweet.get("tweet_created_at", ""))),
+                "summary": compact_summary_text(tweet),
+                "url": url,
             })
-        if not new_tweets:
-            account["last_seen_id"] = newest_tweet_id(tweets) or account.get("last_seen_id", "")
+            grouped_rows.append({
+                "account_name": account.get("name", ""),
+                "screen_name": account.get("screen_name", ""),
+                "tweet_id": str(tweet.get("id_str") or tweet.get("id") or ""),
+                "type": classify_tweet(tweet),
+                "type_label": type_label(classify_tweet(tweet)),
+                "created_at": compact_time(str(tweet.get("tweet_created_at", ""))),
+                "summary_source": digest_summary_source(tweet),
+                "main_text": digest_main_text(tweet),
+                "referenced_text": digest_referenced_text(tweet),
+                "url": url,
+            })
+        account["last_seen_id"] = newest_id
         account["last_checked_at"] = local_timestamp()
+    if delivered:
+        grouped_rows = enrich_grouped_rows(grouped_rows, translate_enabled)
+    if push_mode == "table" and delivered:
+        push_text(format_grouped_digest_table(grouped_rows, overflow_rows), env_map)
+    elif push_mode == "detail":
+        row_by_tweet_id = {row["tweet_id"]: row for row in grouped_rows}
+        for item in delivered:
+            row = row_by_tweet_id.get(item["tweet_id"])
+            if row is None:
+                continue
+            push_text(format_detailed_notification(row), env_map)
+        for item in overflow_rows:
+            account_stub = {
+                "name": item.get("account_name", item["screen_name"]),
+                "screen_name": item["screen_name"],
+            }
+            push_text(
+                summarise_overflow(
+                    account_stub,
+                    int(item["skipped"]),
+                    int(item["shown"]),
+                    "",
+                ),
+                env_map,
+            )
     write_state(state)
     return {
         "delivered_count": len(delivered),
         "delivered": delivered,
         "checked_accounts": len([item for item in state.get("accounts", []) if item.get("enabled", True)]),
+        "bitable_errors": bitable_errors,
+        "push_mode": push_mode,
     }
 
 
@@ -621,6 +1227,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--set-delivery-channel", help="Set DELIVERY_CHANNEL")
     parser.add_argument("--set-delivery-target", help="Set DELIVERY_TARGET")
     parser.add_argument("--set-poll-limit", type=int, help="Set POLL_LIMIT")
+    parser.add_argument("--set-max-new-per-account", type=int, help="Set MAX_NEW_PER_ACCOUNT")
+    parser.add_argument("--set-push-mode", help="Set PUSH_MODE to detail or table")
     parser.add_argument("--set-translate-enabled", help="Set TRANSLATE_ENABLED to true or false")
     return parser.parse_args()
 
@@ -646,12 +1254,21 @@ def main() -> int:
     if args.resume_watch:
         print(json.dumps(control_timer(WATCH_TIMER, "resume"), ensure_ascii=False, indent=2))
         return 0
-    if any(v is not None for v in [args.set_delivery_channel, args.set_delivery_target, args.set_poll_limit, args.set_translate_enabled]):
+    if any(v is not None for v in [
+        args.set_delivery_channel,
+        args.set_delivery_target,
+        args.set_poll_limit,
+        args.set_max_new_per_account,
+        args.set_push_mode,
+        args.set_translate_enabled,
+    ]):
         print(json.dumps(set_config(
             env_map,
             delivery_channel=args.set_delivery_channel,
             delivery_target=args.set_delivery_target,
             poll_limit=args.set_poll_limit,
+            max_new_per_account=args.set_max_new_per_account,
+            push_mode=args.set_push_mode,
             translate_enabled=args.set_translate_enabled,
         ), ensure_ascii=False, indent=2))
         return 0
