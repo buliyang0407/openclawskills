@@ -497,6 +497,45 @@ def preview_account(apikey: str, identifier: str, limit: int, translate_enabled:
     return "\n\n" + ("\n\n" + ("-" * 48) + "\n\n").join(chunks)
 
 
+def preview_all_accounts(
+    state: dict[str, Any],
+    apikey: str,
+    limit: int,
+    translate_enabled: bool,
+) -> str:
+    accounts = [item for item in state.get("accounts", []) if item.get("enabled", True)]
+    if not accounts:
+        return "No monitored accounts configured."
+    sections: list[str] = []
+    for account in accounts:
+        try:
+            tweets = socialdata_user_tweets(str(account["user_id"]), apikey, max(limit, 5))
+        except Exception as exc:
+            sections.append(
+                "\n".join([
+                    f"【测试预览】{account['name']} (@{account['screen_name']})",
+                    f"抓取失败：{exc}",
+                ])
+            )
+            continue
+        if not tweets:
+            sections.append(
+                "\n".join([
+                    f"【测试预览】@{account['screen_name']}",
+                    "没有取到最近帖子。",
+                ])
+            )
+            continue
+        latest = sort_tweets_descending(tweets)[:limit]
+        rendered = [
+            format_notification(tweet, account, translate_enabled)
+            for tweet in sort_tweets_ascending(latest)
+        ]
+        header = f"【测试预览】{account['name']} (@{account['screen_name']})"
+        sections.append(header + "\n\n" + ("\n\n" + ("-" * 48) + "\n\n").join(rendered))
+    return "\n\n" + ("=" * 64) + "\n\n".join([""] + sections)
+
+
 def set_config(
     env_map: dict[str, str],
     *,
@@ -574,6 +613,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alias", help="Optional human alias when adding an account")
     parser.add_argument("--remove-account", help="Remove a monitored account by handle, user id, or alias")
     parser.add_argument("--preview-account", help="Preview recent tweets for one account without changing state")
+    parser.add_argument("--preview-all", action="store_true", help="Preview recent tweets for all monitored accounts")
     parser.add_argument("--limit", type=int, default=3, help="Preview limit for --preview-account")
     parser.add_argument("--check-and-push", action="store_true", help="Run one monitoring pass and send new tweet notifications")
     parser.add_argument("--pause-watch", action="store_true")
@@ -639,6 +679,10 @@ def main() -> int:
     if args.preview_account:
         translate_enabled = env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true"
         print(preview_account(apikey, args.preview_account, args.limit, translate_enabled).strip())
+        return 0
+    if args.preview_all:
+        translate_enabled = env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true"
+        print(preview_all_accounts(state, apikey, args.limit, translate_enabled).strip())
         return 0
     if args.check_and_push:
         print(json.dumps(check_and_push(state, env_map, apikey), ensure_ascii=False, indent=2))

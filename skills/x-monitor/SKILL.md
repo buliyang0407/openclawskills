@@ -12,6 +12,7 @@ Use this skill when the user wants to:
 - add or remove monitored accounts
 - ask which X accounts are currently monitored
 - preview the latest posts from an account
+- preview the latest full post bodies from all monitored accounts
 - pause or resume X monitoring
 - receive bilingual post notifications
 
@@ -76,6 +77,12 @@ Preview recent posts without changing state:
 python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --preview-account @elonmusk --limit 3
 ```
 
+Preview recent full posts for all monitored accounts:
+
+```bash
+python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --preview-all --limit 1
+```
+
 Run one monitoring pass immediately:
 
 ```bash
@@ -103,6 +110,7 @@ python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-de
 - Prefer exact handles when adding accounts. Common names are only aliases, not canonical identifiers.
 - Bilingual notifications should keep the original post text and add a translated section.
 - Quote tweets and retweets should preserve the referenced original content when available.
+- When the user asks for a test run or asks to see recent monitored content, prefer full post previews rather than headline-only summaries.
 - Never print or export the SocialData API key.
 - Never package `/etc/openclaw/x-monitor.env` with the skill export.
 
