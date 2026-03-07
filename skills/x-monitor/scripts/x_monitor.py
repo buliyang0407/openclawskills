@@ -1175,7 +1175,7 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
         account["last_seen_id"] = newest_id
         account["last_checked_at"] = local_timestamp()
     if delivered:
-        grouped_rows = enrich_grouped_rows(grouped_rows, translate_enabled)
+        grouped_rows = lobster_enrich_rows(grouped_rows, translate_enabled)
     if push_mode == "table" and delivered:
         push_text(format_grouped_digest_table(grouped_rows, overflow_rows), env_map)
     elif push_mode == "detail":
