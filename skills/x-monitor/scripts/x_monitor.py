@@ -688,7 +688,7 @@ def lobster_summarize_accounts(accounts: list[dict[str, Any]], window_hours: int
             "1. 只返回 JSON，不要解释，不要 markdown。\n"
             "2. 返回格式：{\"items\":[{\"screen_name\":\"...\",\"overview\":\"...\",\"points\":[\"...\",\"...\"]}]}\n"
             "3. overview 用 24-60 字中文，直接概括这个账号这段时间主要在干什么。\n"
-            "4. points 返回 1-3 条中文要点，每条 18-60 字，去重，不要互相重复，不要照抄原文。\n"
+            "4. points 返回 1-5 条中文要点，每条 18-60 字，去重，不要互相重复，不要照抄原文。\n"
             "5. 如果内容大多是转发，要总结它主要在转传、放大什么信息。\n"
             "6. 不要编造输入里没有的信息，不要输出链接、emoji、时间戳。\n"
             f"输入 JSON：\n{json.dumps(accounts, ensure_ascii=False)}"
@@ -720,14 +720,14 @@ def lobster_summarize_accounts(accounts: list[dict[str, Any]], window_hours: int
             overview = f"最近 {window_hours} 小时主要围绕以下几件事发声或转发。"
         if not points:
             fallback_points: list[str] = []
-            for row in account.get("rows", [])[:3]:
+            for row in account.get("rows", [])[:5]:
                 text = fallback_translate_to_chinese(row.get("summary_source", ""), translate_enabled)
                 text = truncate_text(normalize_text_block(text), 60)
                 if text and text not in fallback_points:
                     fallback_points.append(text)
             points = fallback_points
         account["overview"] = overview
-        account["points"] = points[:3]
+        account["points"] = points[:5]
     return accounts
 
 
@@ -739,7 +739,7 @@ def format_summary_notification(schedule: dict[str, Any], accounts: list[dict[st
             f"{account['account_name']}：最近 {schedule['window_hours']} 小时发了 {account['raw_count']} 条推特。",
             account.get("overview", "") or "这段时间没有可摘要的新内容。",
         ])
-        for index, point in enumerate(account.get("points", [])[:3], start=1):
+        for index, point in enumerate(account.get("points", [])[:5], start=1):
             lines.append(f"{index}. {point}")
     return "\n".join(lines).strip()
 
