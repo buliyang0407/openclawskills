@@ -1,6 +1,6 @@
 ---
 name: x-monitor
-description: Monitor selected X.com accounts using SocialData, fetch new tweets on a schedule, deliver bilingual notifications, and manage the monitored account list by adding, removing, pausing, or previewing accounts.
+description: Monitor selected X.com accounts using SocialData, fetch recent tweets on a schedule, deliver either detailed notifications or AI-written summary digests, and manage the monitored account list by adding, removing, pausing, or previewing accounts.
 homepage: https://docs.socialdata.tools/
 metadata: {"clawdbot":{"requires":{"bins":["python3","systemctl","openclaw"],"files":["/etc/openclaw/x-monitor.env"]}}}
 ---
@@ -14,7 +14,7 @@ Use this skill when the user wants to:
 - preview the latest posts from an account
 - preview the latest full post bodies from all monitored accounts
 - pause or resume X monitoring
-- receive bilingual post notifications
+- receive detailed tweet notifications or periodic AI summary digests
 - optionally archive pushed tweets into a Feishu Bitable for later review
 
 ## Canonical Input Rule
@@ -103,17 +103,24 @@ Switch the delivery target:
 python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-delivery-channel feishu --set-delivery-target ou_xxx
 ```
 
-Limit each account to at most 3 new posts per run:
+Fetch more recent tweets when summary mode needs a wider window:
 
 ```bash
-python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-poll-limit 3 --set-max-new-per-account 3
+python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-poll-limit 20 --set-max-new-per-account 20
 ```
 
-Switch between one-by-one delivery and one digest table per run:
+Switch between detailed per-tweet delivery, table digests, and account summaries:
 
 ```bash
-python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-push-mode detail
+python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-push-mode summary
 ```
+
+Current daytime summary schedule is controlled by:
+
+- `/etc/systemd/system/openclaw-x-monitor.timer`
+- `/etc/openclaw/x-monitor.env`
+
+The active production setup summarizes only the latest 4 hours, skips nighttime delivery, and can be adjusted later if the user asks to change the summary times.
 
 ## Behavioral Rules
 
@@ -121,10 +128,12 @@ python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --set-pu
 - Deliver notifications through `openclaw message send`.
 - New accounts must be seeded with the current latest post so historical tweets do not flood the user.
 - Prefer exact handles when adding accounts. Common names are only aliases, not canonical identifiers.
-- Bilingual notifications should keep the original post text and add a translated section.
+- Detailed mode keeps original text and adds translation when useful.
 - Quote tweets and retweets should preserve the referenced original content when available.
-- To avoid message floods, each account should only deliver a small capped batch per run.
-- `PUSH_MODE=detail` sends one detailed message per tweet, including summary, original text, translation, and any repost/quote content.
+- `PUSH_MODE=summary` is the preferred production mode when the user wants one digest message instead of per-tweet spam.
+- In summary mode, only summarize tweets inside the configured recent time window and avoid repeating the same slot twice.
+- In summary mode, summarize by account, count the tweets in the window, and list only the main themes or events rather than every single tweet.
+- The user may later ask to change summary time slots or add/remove monitored accounts; this skill should support both.
 - If `FEISHU_BITABLE_APP_TOKEN` is configured, delivered tweets may also be appended to a Feishu Bitable table. `FEISHU_BITABLE_TABLE_ID` is optional when the Base contains only one table.
 - When the user asks for a test run or asks to see recent monitored content, prefer full post previews rather than headline-only summaries.
 - Never print or export the SocialData API key.

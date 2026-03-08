@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -21,10 +21,14 @@ OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
 WATCH_TIMER = "openclaw-x-monitor.timer"
 DEFAULT_ENV = {
     "DELIVERY_CHANNEL": "feishu",
-    "POLL_LIMIT": "3",
-    "MAX_NEW_PER_ACCOUNT": "3",
-    "PUSH_MODE": "detail",
+    "POLL_LIMIT": "20",
+    "MAX_NEW_PER_ACCOUNT": "20",
+    "PUSH_MODE": "summary",
     "TRANSLATE_ENABLED": "true",
+    "SUMMARY_WINDOW_HOURS": "4",
+    "SUMMARY_INTERVAL_HOURS": "4",
+    "SUMMARY_ACTIVE_START_HOUR": "8",
+    "SUMMARY_ACTIVE_END_HOUR": "20",
 }
 UA = "Mozilla/5.0 (compatible; OpenClaw X Monitor/1.0; +https://docs.socialdata.tools/)"
 TRANSLATE_AGENT_ID = "main"
@@ -256,6 +260,30 @@ def local_timestamp(ts: float | int | None = None) -> str:
     if ts is None:
         ts = time.time()
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+
+
+def local_now(ts: float | int | None = None) -> datetime:
+    if ts is None:
+        return datetime.now().astimezone()
+    return datetime.fromtimestamp(ts).astimezone()
+
+
+def parse_datetime_text(value: str) -> datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            return parsed.astimezone()
+        return parsed.astimezone()
+    except ValueError:
+        return None
+
+
+def tweet_created_at(tweet: dict[str, Any]) -> datetime | None:
+    return parse_datetime_text(str(tweet.get("tweet_created_at", "")))
 
 
 def is_chinese_text(text: str) -> bool:
@@ -557,6 +585,163 @@ def lobster_enrich_rows(rows: list[dict[str, str]], translate_enabled: bool) -> 
         row["main_translation"] = enriched.get("main_translation", "") or fallback_translate_to_chinese(row["main_text"], translate_enabled)
         row["referenced_translation"] = enriched.get("referenced_translation", "") or fallback_translate_to_chinese(row["referenced_text"], translate_enabled)
     return rows
+
+
+def summary_schedule(env_map: dict[str, str], now_ts: float | int | None = None) -> dict[str, Any]:
+    window_hours = parse_int_env(env_map, "SUMMARY_WINDOW_HOURS", int(DEFAULT_ENV["SUMMARY_WINDOW_HOURS"]), minimum=1, maximum=12)
+    interval_hours = parse_int_env(env_map, "SUMMARY_INTERVAL_HOURS", int(DEFAULT_ENV["SUMMARY_INTERVAL_HOURS"]), minimum=1, maximum=12)
+    start_hour = parse_int_env(env_map, "SUMMARY_ACTIVE_START_HOUR", int(DEFAULT_ENV["SUMMARY_ACTIVE_START_HOUR"]), minimum=0, maximum=23)
+    end_hour = parse_int_env(env_map, "SUMMARY_ACTIVE_END_HOUR", int(DEFAULT_ENV["SUMMARY_ACTIVE_END_HOUR"]), minimum=1, maximum=23)
+    if end_hour <= start_hour:
+        raise SystemExit("SUMMARY_ACTIVE_END_HOUR must be greater than SUMMARY_ACTIVE_START_HOUR")
+    if window_hours > (end_hour - start_hour):
+        raise SystemExit("SUMMARY_WINDOW_HOURS must fit inside the active daytime window")
+    now_dt = local_now(now_ts)
+    day_start = now_dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    day_end = now_dt.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+    slot_hours = list(range(start_hour, end_hour + 1, interval_hours))
+    slot_hour = next((hour for hour in reversed(slot_hours) if now_dt >= now_dt.replace(hour=hour, minute=0, second=0, microsecond=0)), None)
+    if slot_hour is None:
+        return {
+            "should_run": False,
+            "reason": "before_first_slot",
+            "window_hours": window_hours,
+            "interval_hours": interval_hours,
+            "start_hour": start_hour,
+            "end_hour": end_hour,
+        }
+    slot_end = now_dt.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
+    if slot_hour - start_hour < window_hours:
+        return {
+            "should_run": False,
+            "reason": "window_not_ready",
+            "slot_end": slot_end.isoformat(),
+            "window_hours": window_hours,
+            "interval_hours": interval_hours,
+            "start_hour": start_hour,
+            "end_hour": end_hour,
+        }
+    window_start = max(day_start, slot_end - timedelta(hours=window_hours))
+    return {
+        "should_run": True,
+        "window_hours": window_hours,
+        "interval_hours": interval_hours,
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+        "slot_key": slot_end.strftime("%Y-%m-%d %H:%M:%S"),
+        "window_start": window_start,
+        "window_end": slot_end,
+        "window_label": f"{window_start.strftime('%m-%d %H:%M')} - {slot_end.strftime('%m-%d %H:%M')}",
+        "day_start": day_start,
+        "day_end": day_end,
+    }
+
+
+def tweet_in_window(tweet: dict[str, Any], window_start: datetime, window_end: datetime) -> bool:
+    created_at = tweet_created_at(tweet)
+    if created_at is None:
+        return False
+    return window_start <= created_at <= window_end
+
+
+def summary_dedupe_key(tweet: dict[str, Any]) -> str:
+    source = normalize_text_block(digest_main_text(tweet) or digest_referenced_text(tweet) or tweet_text(tweet))
+    if source:
+        return source.lower()[:400]
+    return str(tweet.get("id_str") or tweet.get("id") or "")
+
+
+def dedupe_summary_tweets(tweets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for tweet in sort_tweets_descending(tweets):
+        key = summary_dedupe_key(tweet)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(tweet)
+    return unique
+
+
+def build_summary_row(tweet: dict[str, Any], account: dict[str, Any]) -> dict[str, str]:
+    return {
+        "account_name": account.get("name", ""),
+        "screen_name": account.get("screen_name", ""),
+        "tweet_id": str(tweet.get("id_str") or tweet.get("id") or ""),
+        "type": classify_tweet(tweet),
+        "type_label": type_label(classify_tweet(tweet)),
+        "created_at": compact_time(str(tweet.get("tweet_created_at", ""))),
+        "summary_source": digest_summary_source(tweet),
+        "main_text": digest_main_text(tweet),
+        "referenced_text": digest_referenced_text(tweet),
+    }
+
+
+def lobster_summarize_accounts(accounts: list[dict[str, Any]], window_hours: int, translate_enabled: bool) -> list[dict[str, Any]]:
+    if not accounts:
+        return accounts
+    model_map: dict[str, dict[str, Any]] = {}
+    if translate_enabled:
+        prompt = (
+            f"你是 X 账号监控摘要助手。请阅读每个账号最近 {window_hours} 小时内的推文集合，并输出按账号汇总的中文摘要。\n"
+            "规则：\n"
+            "1. 只返回 JSON，不要解释，不要 markdown。\n"
+            "2. 返回格式：{\"items\":[{\"screen_name\":\"...\",\"overview\":\"...\",\"points\":[\"...\",\"...\"]}]}\n"
+            "3. overview 用 24-60 字中文，直接概括这个账号这段时间主要在干什么。\n"
+            "4. points 返回 1-3 条中文要点，每条 18-60 字，去重，不要互相重复，不要照抄原文。\n"
+            "5. 如果内容大多是转发，要总结它主要在转传、放大什么信息。\n"
+            "6. 不要编造输入里没有的信息，不要输出链接、emoji、时间戳。\n"
+            f"输入 JSON：\n{json.dumps(accounts, ensure_ascii=False)}"
+        )
+        try:
+            result = run_lobster_json(prompt, timeout_seconds=180)
+            items = result.get("items", []) if isinstance(result, dict) else result
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    screen_name = str(item.get("screen_name", "")).strip()
+                    if not screen_name:
+                        continue
+                    points = item.get("points", [])
+                    if not isinstance(points, list):
+                        points = []
+                    model_map[screen_name.lower()] = {
+                        "overview": str(item.get("overview", "")).strip(),
+                        "points": [str(point).strip() for point in points if str(point).strip()],
+                    }
+        except Exception:
+            model_map = {}
+    for account in accounts:
+        enriched = model_map.get(str(account.get("screen_name", "")).lower(), {})
+        overview = enriched.get("overview", "")
+        points = enriched.get("points", [])
+        if not overview:
+            overview = f"最近 {window_hours} 小时主要围绕以下几件事发声或转发。"
+        if not points:
+            fallback_points: list[str] = []
+            for row in account.get("rows", [])[:3]:
+                text = fallback_translate_to_chinese(row.get("summary_source", ""), translate_enabled)
+                text = truncate_text(normalize_text_block(text), 60)
+                if text and text not in fallback_points:
+                    fallback_points.append(text)
+            points = fallback_points
+        account["overview"] = overview
+        account["points"] = points[:3]
+    return accounts
+
+
+def format_summary_notification(schedule: dict[str, Any], accounts: list[dict[str, Any]]) -> str:
+    lines = [f"X 账号摘要（{schedule['window_label']}）"]
+    for account in accounts:
+        lines.extend([
+            "",
+            f"{account['account_name']}：最近 {schedule['window_hours']} 小时发了 {account['raw_count']} 条推特。",
+            account.get("overview", "") or "这段时间没有可摘要的新内容。",
+        ])
+        for index, point in enumerate(account.get("points", [])[:3], start=1):
+            lines.append(f"{index}. {point}")
+    return "\n".join(lines).strip()
 
 
 def format_detailed_notification(row: dict[str, str]) -> str:
@@ -975,6 +1160,10 @@ def public_config(env_map: dict[str, str]) -> dict[str, Any]:
         "max_new_per_account": parse_int_env(env_map, "MAX_NEW_PER_ACCOUNT", int(DEFAULT_ENV["MAX_NEW_PER_ACCOUNT"]), minimum=1, maximum=20),
         "push_mode": env_map.get("PUSH_MODE", DEFAULT_ENV["PUSH_MODE"]).strip(),
         "translate_enabled": env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true",
+        "summary_window_hours": parse_int_env(env_map, "SUMMARY_WINDOW_HOURS", int(DEFAULT_ENV["SUMMARY_WINDOW_HOURS"]), minimum=1, maximum=12),
+        "summary_interval_hours": parse_int_env(env_map, "SUMMARY_INTERVAL_HOURS", int(DEFAULT_ENV["SUMMARY_INTERVAL_HOURS"]), minimum=1, maximum=12),
+        "summary_active_start_hour": parse_int_env(env_map, "SUMMARY_ACTIVE_START_HOUR", int(DEFAULT_ENV["SUMMARY_ACTIVE_START_HOUR"]), minimum=0, maximum=23),
+        "summary_active_end_hour": parse_int_env(env_map, "SUMMARY_ACTIVE_END_HOUR", int(DEFAULT_ENV["SUMMARY_ACTIVE_END_HOUR"]), minimum=1, maximum=23),
         "api_key_configured": bool(env_map.get("SOCIALDATA_API_KEY", "")),
         "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
         "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
@@ -984,6 +1173,7 @@ def public_config(env_map: dict[str, str]) -> dict[str, Any]:
 def show_status(state: dict[str, Any], env_map: dict[str, str]) -> dict[str, Any]:
     payload = public_config(env_map)
     payload["watch_timer"] = timer_state(WATCH_TIMER)
+    payload["last_summary_slot"] = state.get("summary", {}).get("last_slot_end", "")
     payload["monitored_accounts"] = [
         {
             "user_id": item.get("user_id", ""),
@@ -1084,8 +1274,8 @@ def set_config(
         changed = True
     if push_mode is not None:
         normalized = push_mode.strip().lower()
-        if normalized not in {"detail", "table"}:
-            raise SystemExit("PUSH_MODE must be detail or table")
+        if normalized not in {"detail", "table", "summary"}:
+            raise SystemExit("PUSH_MODE must be detail, table, or summary")
         env_map["PUSH_MODE"] = normalized
         changed = True
     if translate_enabled is not None:
@@ -1111,16 +1301,60 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
     )
     push_mode = env_map.get("PUSH_MODE", DEFAULT_ENV["PUSH_MODE"]).strip().lower()
     translate_enabled = env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true"
-    bitable_client = bitable_client_from_env(env_map)
+    bitable_client = None if push_mode == "summary" else bitable_client_from_env(env_map)
     delivered: list[dict[str, Any]] = []
     bitable_errors: list[dict[str, str]] = []
     overflow_rows: list[dict[str, str]] = []
     grouped_rows: list[dict[str, str]] = []
+    summary_accounts: list[dict[str, Any]] = []
+    summary_meta: dict[str, Any] | None = None
+    summary_state = state.setdefault("summary", {})
+    if push_mode == "summary":
+        summary_meta = summary_schedule(env_map)
+        if not summary_meta.get("should_run", False):
+            write_state(state)
+            return {
+                "delivered_count": 0,
+                "delivered": [],
+                "checked_accounts": len([item for item in state.get("accounts", []) if item.get("enabled", True)]),
+                "bitable_errors": [],
+                "push_mode": push_mode,
+                "skipped_reason": summary_meta.get("reason", "inactive_window"),
+            }
+        if summary_state.get("last_slot_end") == summary_meta["slot_key"]:
+            write_state(state)
+            return {
+                "delivered_count": 0,
+                "delivered": [],
+                "checked_accounts": len([item for item in state.get("accounts", []) if item.get("enabled", True)]),
+                "bitable_errors": [],
+                "push_mode": push_mode,
+                "skipped_reason": "already_sent_for_slot",
+                "slot_key": summary_meta["slot_key"],
+            }
     for account in state.get("accounts", []):
         if not account.get("enabled", True):
             continue
         tweets = socialdata_user_tweets(str(account["user_id"]), apikey, poll_limit)
         if not tweets:
+            account["last_checked_at"] = local_timestamp()
+            continue
+        newest_id = newest_tweet_id(tweets) or account.get("last_seen_id", "")
+        if push_mode == "summary" and summary_meta is not None:
+            window_tweets = [
+                item for item in tweets
+                if tweet_in_window(item, summary_meta["window_start"], summary_meta["window_end"])
+            ]
+            unique_tweets = dedupe_summary_tweets(window_tweets)
+            if unique_tweets:
+                summary_accounts.append({
+                    "account_name": account.get("name", ""),
+                    "screen_name": account.get("screen_name", ""),
+                    "raw_count": len(window_tweets),
+                    "unique_count": len(unique_tweets),
+                    "rows": [build_summary_row(tweet, account) for tweet in unique_tweets],
+                })
+            account["last_seen_id"] = newest_id
             account["last_checked_at"] = local_timestamp()
             continue
         latest_seen = int(account.get("last_seen_id") or 0)
@@ -1130,7 +1364,6 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
         ]
         deliver_tweets = sort_tweets_descending(new_tweets)[:max_new_per_account]
         skipped_count = max(0, len(new_tweets) - len(deliver_tweets))
-        newest_id = newest_tweet_id(tweets) or account.get("last_seen_id", "")
         if skipped_count:
             overflow_rows.append({
                 "account_name": account.get("name", ""),
@@ -1174,6 +1407,31 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
             })
         account["last_seen_id"] = newest_id
         account["last_checked_at"] = local_timestamp()
+    if push_mode == "summary" and summary_meta is not None:
+        summary_state["last_slot_end"] = summary_meta["slot_key"]
+        summary_state["last_window_label"] = summary_meta["window_label"]
+        active_accounts = [item for item in summary_accounts if item.get("raw_count", 0) > 0]
+        if active_accounts:
+            active_accounts = lobster_summarize_accounts(active_accounts, int(summary_meta["window_hours"]), translate_enabled)
+            push_text(format_summary_notification(summary_meta, active_accounts), env_map)
+        write_state(state)
+        return {
+            "delivered_count": 1 if active_accounts else 0,
+            "delivered": [
+                {
+                    "account_name": item["account_name"],
+                    "screen_name": item["screen_name"],
+                    "raw_count": item["raw_count"],
+                    "unique_count": item["unique_count"],
+                }
+                for item in active_accounts
+            ],
+            "checked_accounts": len([item for item in state.get("accounts", []) if item.get("enabled", True)]),
+            "bitable_errors": [],
+            "push_mode": push_mode,
+            "slot_key": summary_meta["slot_key"],
+            "window_label": summary_meta["window_label"],
+        }
     if delivered:
         grouped_rows = lobster_enrich_rows(grouped_rows, translate_enabled)
     if push_mode == "table" and delivered:
@@ -1228,7 +1486,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--set-delivery-target", help="Set DELIVERY_TARGET")
     parser.add_argument("--set-poll-limit", type=int, help="Set POLL_LIMIT")
     parser.add_argument("--set-max-new-per-account", type=int, help="Set MAX_NEW_PER_ACCOUNT")
-    parser.add_argument("--set-push-mode", help="Set PUSH_MODE to detail or table")
+    parser.add_argument("--set-push-mode", help="Set PUSH_MODE to detail, table, or summary")
     parser.add_argument("--set-translate-enabled", help="Set TRANSLATE_ENABLED to true or false")
     return parser.parse_args()
 
