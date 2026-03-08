@@ -633,12 +633,21 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str]) -> dict[str, 
     summary_max_articles = parse_int_env(env_map, "SUMMARY_MAX_ARTICLES", int(DEFAULT_ENV["SUMMARY_MAX_ARTICLES"]), minimum=1, maximum=20)
     summary_mode = env_map.get("SUMMARY_MODE", DEFAULT_ENV["SUMMARY_MODE"]).strip().lower()
     digests: list[dict[str, Any]] = []
+    account_errors: list[dict[str, str]] = []
     now = datetime.now(timezone.utc)
     window_hours = parse_int_env(env_map, "PUSH_WINDOW_HOURS", 24, minimum=1, maximum=168)
     for account in state.get("accounts", []):
         if not account.get("enabled", True):
             continue
-        articles = fetch_articles(account, fetch_limit)
+        try:
+            articles = fetch_articles(account, fetch_limit)
+        except Exception as exc:
+            account_errors.append({
+                "account": account.get("name", ""),
+                "feed_url": account.get("feed_url", ""),
+                "error": str(exc),
+            })
+            continue
         seen_ids = list(account.get("seen_ids", []))
         new_articles = []
         for item in articles:
@@ -669,7 +678,11 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str]) -> dict[str, 
         account["last_pushed_at"] = datetime.now().isoformat()
     if not digests:
         write_state(state)
-        return {"delivered_count": 0, "accounts_checked": len(state.get("accounts", []))}
+        return {
+            "delivered_count": 0,
+            "accounts_checked": len(state.get("accounts", [])),
+            "account_errors": account_errors,
+        }
     bitable_errors = append_bitable_articles(env_map, digests)
     push_text(render_digest(digests), env_map)
     write_state(state)
@@ -677,6 +690,7 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str]) -> dict[str, 
         "delivered_count": sum(len(item["articles"]) for item in digests),
         "accounts_with_updates": len(digests),
         "accounts_checked": len(state.get("accounts", [])),
+        "account_errors": account_errors,
         "bitable_errors": bitable_errors,
     }
 
