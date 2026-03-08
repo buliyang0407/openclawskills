@@ -49,24 +49,10 @@ BITABLE_TWEET_FIELDS = (
     "Data Source",
 )
 BITABLE_SUMMARY_FIELDS = (
-    "Slot Key",
-    "Window Label",
-    "Window Start",
-    "Window End",
-    "Window Hours",
-    "Account Name",
-    "Screen Name",
-    "Tweet Count",
-    "Unique Topic Count",
-    "Overview",
-    "Point 1",
-    "Point 2",
-    "Point 3",
-    "Point 4",
-    "Point 5",
-    "Recorded At",
-    "Push Mode",
-    "Data Source",
+    "时间",
+    "账号",
+    "发了什么",
+    "核心意思",
 )
 
 
@@ -835,6 +821,13 @@ def table_cell(text: str) -> str:
     return value.replace("|", "/")
 
 
+def compact_summary_points(points: list[str]) -> str:
+    cleaned = [normalize_text_block(item) for item in points if normalize_text_block(item)]
+    if not cleaned:
+        return ""
+    return "；".join(cleaned[:5])
+
+
 def format_grouped_digest_table(
     rows: list[dict[str, str]],
     overflow_rows: list[dict[str, str]],
@@ -1106,27 +1099,13 @@ class FeishuTenantBitableClient:
 
     def append_summary(self, account_summary: dict[str, Any], schedule: dict[str, Any]) -> None:
         self.ensure_fields(BITABLE_SUMMARY_FIELDS)
-        points = list(account_summary.get("points", []))[:5]
+        points_text = compact_summary_points(list(account_summary.get("points", [])))
         payload = {
             "fields": {
-                "Slot Key": str(schedule.get("slot_key", "")),
-                "Window Label": str(schedule.get("window_label", "")),
-                "Window Start": schedule.get("window_start", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
-                "Window End": schedule.get("window_end", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
-                "Window Hours": str(schedule.get("window_hours", "")),
-                "Account Name": account_summary.get("account_name", ""),
-                "Screen Name": account_summary.get("screen_name", ""),
-                "Tweet Count": str(account_summary.get("raw_count", 0)),
-                "Unique Topic Count": str(account_summary.get("unique_count", 0)),
-                "Overview": account_summary.get("overview", ""),
-                "Point 1": points[0] if len(points) > 0 else "",
-                "Point 2": points[1] if len(points) > 1 else "",
-                "Point 3": points[2] if len(points) > 2 else "",
-                "Point 4": points[3] if len(points) > 3 else "",
-                "Point 5": points[4] if len(points) > 4 else "",
-                "Recorded At": local_timestamp(),
-                "Push Mode": "summary",
-                "Data Source": "SocialData",
+                "时间": schedule.get("window_end", local_now()).strftime("%m-%d %H:%M"),
+                "账号": f"{account_summary.get('account_name', '')} (@{account_summary.get('screen_name', '')})".strip(),
+                "发了什么": points_text or account_summary.get("overview", ""),
+                "核心意思": account_summary.get("overview", ""),
             }
         }
         data = request_json(
@@ -1202,27 +1181,13 @@ class FeishuPluginBitableClient:
         )
 
     def append_summary(self, account_summary: dict[str, Any], schedule: dict[str, Any]) -> None:
-        points = list(account_summary.get("points", []))[:5]
+        points_text = compact_summary_points(list(account_summary.get("points", [])))
         self._helper_request(
             {
-                "Slot Key": str(schedule.get("slot_key", "")),
-                "Window Label": str(schedule.get("window_label", "")),
-                "Window Start": schedule.get("window_start", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
-                "Window End": schedule.get("window_end", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
-                "Window Hours": str(schedule.get("window_hours", "")),
-                "Account Name": account_summary.get("account_name", ""),
-                "Screen Name": account_summary.get("screen_name", ""),
-                "Tweet Count": str(account_summary.get("raw_count", 0)),
-                "Unique Topic Count": str(account_summary.get("unique_count", 0)),
-                "Overview": account_summary.get("overview", ""),
-                "Point 1": points[0] if len(points) > 0 else "",
-                "Point 2": points[1] if len(points) > 1 else "",
-                "Point 3": points[2] if len(points) > 2 else "",
-                "Point 4": points[3] if len(points) > 3 else "",
-                "Point 5": points[4] if len(points) > 4 else "",
-                "Recorded At": local_timestamp(),
-                "Push Mode": "summary",
-                "Data Source": "SocialData",
+                "时间": schedule.get("window_end", local_now()).strftime("%m-%d %H:%M"),
+                "账号": f"{account_summary.get('account_name', '')} (@{account_summary.get('screen_name', '')})".strip(),
+                "发了什么": points_text or account_summary.get("overview", ""),
+                "核心意思": account_summary.get("overview", ""),
             },
             BITABLE_SUMMARY_FIELDS,
         )
