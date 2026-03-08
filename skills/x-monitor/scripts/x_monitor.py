@@ -19,6 +19,7 @@ ENV_PATH = Path("/etc/openclaw/x-monitor.env")
 STATE_PATH = Path("/var/lib/openclaw/x-monitor/state.json")
 OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
 WATCH_TIMER = "openclaw-x-monitor.timer"
+BITABLE_NODE_HELPER_PATH = Path(__file__).with_name("feishu_bitable_uat.mjs")
 DEFAULT_ENV = {
     "DELIVERY_CHANNEL": "feishu",
     "POLL_LIMIT": "20",
@@ -32,7 +33,7 @@ DEFAULT_ENV = {
 }
 UA = "Mozilla/5.0 (compatible; OpenClaw X Monitor/1.0; +https://docs.socialdata.tools/)"
 TRANSLATE_AGENT_ID = "main"
-BITABLE_FIELDS = (
+BITABLE_TWEET_FIELDS = (
     "Tweet ID",
     "Account Name",
     "Screen Name",
@@ -45,6 +46,26 @@ BITABLE_FIELDS = (
     "Referenced URL",
     "Referenced Text",
     "Recorded At",
+    "Data Source",
+)
+BITABLE_SUMMARY_FIELDS = (
+    "Slot Key",
+    "Window Label",
+    "Window Start",
+    "Window End",
+    "Window Hours",
+    "Account Name",
+    "Screen Name",
+    "Tweet Count",
+    "Unique Topic Count",
+    "Overview",
+    "Point 1",
+    "Point 2",
+    "Point 3",
+    "Point 4",
+    "Point 5",
+    "Recorded At",
+    "Push Mode",
     "Data Source",
 )
 
@@ -85,6 +106,16 @@ def run_command(args: list[str], check: bool = True) -> subprocess.CompletedProc
     env = dict(os.environ)
     env["PATH"] = "/root/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:" + env.get("PATH", "")
     proc = subprocess.run(args, capture_output=True, text=True, env=env)
+    if check and proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(f"command failed: {' '.join(args)} detail={detail}")
+    return proc
+
+
+def run_command_with_input(args: list[str], payload: str, check: bool = True) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PATH"] = "/root/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:" + env.get("PATH", "")
+    proc = subprocess.run(args, input=payload, capture_output=True, text=True, env=env)
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
         raise RuntimeError(f"command failed: {' '.join(args)} detail={detail}")
@@ -236,12 +267,24 @@ def load_openclaw_feishu_account() -> dict[str, str]:
         return {}
     config = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
     feishu = config.get("channels", {}).get("feishu", {})
-    main = feishu.get("accounts", {}).get("main", {})
-    app_id = str(main.get("appId", "")).strip()
-    app_secret = str(main.get("appSecret", "")).strip()
+    main = feishu.get("accounts", {}).get(feishu.get("defaultAccount", "main"), {})
+    app_id = str(feishu.get("appId", "") or main.get("appId", "")).strip()
+    app_secret = str(feishu.get("appSecret", "") or main.get("appSecret", "")).strip()
+    domain = str(feishu.get("domain", "") or main.get("domain", "") or "feishu").strip()
     if not app_id or not app_secret:
         return {}
-    return {"app_id": app_id, "app_secret": app_secret}
+    return {"app_id": app_id, "app_secret": app_secret, "domain": domain}
+
+
+def derive_bitable_user_open_id(env_map: dict[str, str]) -> str:
+    explicit = env_map.get("FEISHU_BITABLE_USER_OPEN_ID", "").strip()
+    if explicit:
+        return explicit
+    delivery_channel = env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]).strip().lower()
+    delivery_target = env_map.get("DELIVERY_TARGET", "").strip()
+    if delivery_channel == "feishu" and delivery_target.startswith("ou_"):
+        return delivery_target
+    return ""
 
 
 def find_account(state: dict[str, Any], identifier: str) -> dict[str, Any] | None:
@@ -934,7 +977,7 @@ def push_text(text: str, env_map: dict[str, str]) -> None:
     ])
 
 
-class FeishuBitableClient:
+class FeishuTenantBitableClient:
     def __init__(self, app_id: str, app_secret: str, app_token: str, table_id: str | None = None) -> None:
         self.app_id = app_id
         self.app_secret = app_secret
@@ -942,7 +985,7 @@ class FeishuBitableClient:
         self.table_id = table_id or ""
         self._tenant_access_token = ""
         self._token_expiry = 0.0
-        self._fields_ready = False
+        self._prepared_field_sets: set[tuple[str, ...]] = set()
 
     def _auth_headers(self) -> dict[str, str]:
         return {
@@ -974,9 +1017,9 @@ class FeishuBitableClient:
             raise RuntimeError("Feishu tenant token missing in auth response")
         return self._tenant_access_token
 
-    def ensure_fields(self) -> None:
+    def ensure_fields(self, field_names: tuple[str, ...]) -> None:
         self.ensure_table_id()
-        if self._fields_ready:
+        if field_names in self._prepared_field_sets:
             return
         data = request_json(
             f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/fields?page_size=500",
@@ -990,7 +1033,7 @@ class FeishuBitableClient:
             for item in data.get("data", {}).get("items", [])
             if item.get("field_name")
         }
-        for field_name in BITABLE_FIELDS:
+        for field_name in field_names:
             if field_name in existing:
                 continue
             created = request_json(
@@ -1005,7 +1048,7 @@ class FeishuBitableClient:
             )
             if created.get("code") != 0:
                 raise RuntimeError(f"failed to create Feishu Bitable field '{field_name}': {created}")
-        self._fields_ready = True
+        self._prepared_field_sets.add(field_names)
 
     def ensure_table_id(self) -> str:
         if self.table_id:
@@ -1032,7 +1075,7 @@ class FeishuBitableClient:
         )
 
     def append_tweet(self, tweet: dict[str, Any], account: dict[str, Any]) -> None:
-        self.ensure_fields()
+        self.ensure_fields(BITABLE_TWEET_FIELDS)
         referenced_author, referenced_url, referenced_text = referenced_tweet_context(tweet)
         payload = {
             "fields": {
@@ -1061,6 +1104,129 @@ class FeishuBitableClient:
         if data.get("code") != 0:
             raise RuntimeError(f"failed to append Feishu Bitable record: {data}")
 
+    def append_summary(self, account_summary: dict[str, Any], schedule: dict[str, Any]) -> None:
+        self.ensure_fields(BITABLE_SUMMARY_FIELDS)
+        points = list(account_summary.get("points", []))[:5]
+        payload = {
+            "fields": {
+                "Slot Key": str(schedule.get("slot_key", "")),
+                "Window Label": str(schedule.get("window_label", "")),
+                "Window Start": schedule.get("window_start", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
+                "Window End": schedule.get("window_end", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
+                "Window Hours": str(schedule.get("window_hours", "")),
+                "Account Name": account_summary.get("account_name", ""),
+                "Screen Name": account_summary.get("screen_name", ""),
+                "Tweet Count": str(account_summary.get("raw_count", 0)),
+                "Unique Topic Count": str(account_summary.get("unique_count", 0)),
+                "Overview": account_summary.get("overview", ""),
+                "Point 1": points[0] if len(points) > 0 else "",
+                "Point 2": points[1] if len(points) > 1 else "",
+                "Point 3": points[2] if len(points) > 2 else "",
+                "Point 4": points[3] if len(points) > 3 else "",
+                "Point 5": points[4] if len(points) > 4 else "",
+                "Recorded At": local_timestamp(),
+                "Push Mode": "summary",
+                "Data Source": "SocialData",
+            }
+        }
+        data = request_json(
+            f"{FEISHU_BASE}/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/records",
+            method="POST",
+            payload=payload,
+            headers=self._auth_headers(),
+            timeout=20,
+        )
+        if data.get("code") != 0:
+            raise RuntimeError(f"failed to append Feishu Bitable summary record: {data}")
+
+
+class FeishuPluginBitableClient:
+    def __init__(
+        self,
+        app_id: str,
+        app_secret: str,
+        app_token: str,
+        table_id: str | None,
+        user_open_id: str,
+        domain: str = "feishu",
+    ) -> None:
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.app_token = app_token
+        self.table_id = table_id or ""
+        self.user_open_id = user_open_id
+        self.domain = domain or "feishu"
+
+    def _helper_request(self, fields: dict[str, str], field_names: tuple[str, ...]) -> None:
+        if not BITABLE_NODE_HELPER_PATH.exists():
+            raise RuntimeError(f"Feishu Bitable helper not found: {BITABLE_NODE_HELPER_PATH}")
+        payload = {
+            "action": "append_record",
+            "appId": self.app_id,
+            "appSecret": self.app_secret,
+            "domain": self.domain,
+            "userOpenId": self.user_open_id,
+            "appToken": self.app_token,
+            "tableId": self.table_id,
+            "fieldNames": list(field_names),
+            "fields": fields,
+        }
+        proc = run_command_with_input(
+            ["node", str(BITABLE_NODE_HELPER_PATH)],
+            json.dumps(payload, ensure_ascii=False),
+        )
+        data = json.loads(proc.stdout.strip() or "{}")
+        table_id = str(data.get("tableId", "")).strip()
+        if table_id:
+            self.table_id = table_id
+
+    def append_tweet(self, tweet: dict[str, Any], account: dict[str, Any]) -> None:
+        referenced_author, referenced_url, referenced_text = referenced_tweet_context(tweet)
+        self._helper_request(
+            {
+                "Tweet ID": str(tweet.get("id_str") or tweet.get("id") or ""),
+                "Account Name": account.get("name", ""),
+                "Screen Name": account.get("screen_name", ""),
+                "Alias": account.get("alias", ""),
+                "Type": classify_tweet(tweet),
+                "Created At": str(tweet.get("tweet_created_at", "")),
+                "Tweet URL": f"https://x.com/{account['screen_name']}/status/{tweet['id_str']}",
+                "Main Text": tweet_text(tweet),
+                "Referenced Author": referenced_author,
+                "Referenced URL": referenced_url,
+                "Referenced Text": referenced_text,
+                "Recorded At": local_timestamp(),
+                "Data Source": "SocialData",
+            },
+            BITABLE_TWEET_FIELDS,
+        )
+
+    def append_summary(self, account_summary: dict[str, Any], schedule: dict[str, Any]) -> None:
+        points = list(account_summary.get("points", []))[:5]
+        self._helper_request(
+            {
+                "Slot Key": str(schedule.get("slot_key", "")),
+                "Window Label": str(schedule.get("window_label", "")),
+                "Window Start": schedule.get("window_start", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
+                "Window End": schedule.get("window_end", local_now()).strftime("%Y-%m-%d %H:%M:%S"),
+                "Window Hours": str(schedule.get("window_hours", "")),
+                "Account Name": account_summary.get("account_name", ""),
+                "Screen Name": account_summary.get("screen_name", ""),
+                "Tweet Count": str(account_summary.get("raw_count", 0)),
+                "Unique Topic Count": str(account_summary.get("unique_count", 0)),
+                "Overview": account_summary.get("overview", ""),
+                "Point 1": points[0] if len(points) > 0 else "",
+                "Point 2": points[1] if len(points) > 1 else "",
+                "Point 3": points[2] if len(points) > 2 else "",
+                "Point 4": points[3] if len(points) > 3 else "",
+                "Point 5": points[4] if len(points) > 4 else "",
+                "Recorded At": local_timestamp(),
+                "Push Mode": "summary",
+                "Data Source": "SocialData",
+            },
+            BITABLE_SUMMARY_FIELDS,
+        )
+
 
 def sort_tweets_ascending(tweets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(tweets, key=lambda item: int(item.get("id_str") or item.get("id") or 0))
@@ -1077,11 +1243,26 @@ def newest_tweet_id(tweets: list[dict[str, Any]]) -> str:
     return str(newest.get("id_str") or newest.get("id") or "")
 
 
-def bitable_client_from_env(env_map: dict[str, str]) -> FeishuBitableClient | None:
+def bitable_client_from_env(env_map: dict[str, str]) -> FeishuTenantBitableClient | FeishuPluginBitableClient | None:
     app_token = env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()
     table_id = env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()
     if not app_token:
         return None
+    auth_mode = env_map.get("FEISHU_BITABLE_AUTH_MODE", "plugin").strip().lower()
+    if auth_mode in {"plugin", "official", "user"}:
+        creds = load_openclaw_feishu_account()
+        app_id = creds.get("app_id", "")
+        app_secret = creds.get("app_secret", "")
+        domain = creds.get("domain", "feishu")
+        user_open_id = derive_bitable_user_open_id(env_map)
+        if not app_id or not app_secret:
+            raise RuntimeError("Feishu Bitable plugin mode requires Feishu app credentials in openclaw.json")
+        if not user_open_id:
+            raise RuntimeError(
+                "Feishu Bitable plugin mode requires FEISHU_BITABLE_USER_OPEN_ID, "
+                "or a Feishu DELIVERY_TARGET that is a user open_id"
+            )
+        return FeishuPluginBitableClient(app_id, app_secret, app_token, table_id, user_open_id, domain)
     app_id = env_map.get("FEISHU_APP_ID", "").strip()
     app_secret = env_map.get("FEISHU_APP_SECRET", "").strip()
     if not app_id or not app_secret:
@@ -1090,7 +1271,7 @@ def bitable_client_from_env(env_map: dict[str, str]) -> FeishuBitableClient | No
         app_secret = creds.get("app_secret", "")
     if not app_id or not app_secret:
         raise RuntimeError("Feishu Bitable is configured but app credentials are unavailable")
-    return FeishuBitableClient(app_id, app_secret, app_token, table_id)
+    return FeishuTenantBitableClient(app_id, app_secret, app_token, table_id)
 
 
 def add_account(state: dict[str, Any], apikey: str, identifier: str, alias: str | None, poll_limit: int) -> dict[str, Any]:
@@ -1167,6 +1348,8 @@ def public_config(env_map: dict[str, str]) -> dict[str, Any]:
         "api_key_configured": bool(env_map.get("SOCIALDATA_API_KEY", "")),
         "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
         "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
+        "bitable_auth_mode": env_map.get("FEISHU_BITABLE_AUTH_MODE", "plugin").strip().lower(),
+        "bitable_user_open_id_configured": bool(derive_bitable_user_open_id(env_map)),
     }
 
 
@@ -1301,7 +1484,7 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
     )
     push_mode = env_map.get("PUSH_MODE", DEFAULT_ENV["PUSH_MODE"]).strip().lower()
     translate_enabled = env_map.get("TRANSLATE_ENABLED", DEFAULT_ENV["TRANSLATE_ENABLED"]).lower() == "true"
-    bitable_client = None if push_mode == "summary" else bitable_client_from_env(env_map)
+    bitable_client = bitable_client_from_env(env_map)
     delivered: list[dict[str, Any]] = []
     bitable_errors: list[dict[str, str]] = []
     overflow_rows: list[dict[str, str]] = []
@@ -1414,6 +1597,16 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
         if active_accounts:
             active_accounts = lobster_summarize_accounts(active_accounts, int(summary_meta["window_hours"]), translate_enabled)
             push_text(format_summary_notification(summary_meta, active_accounts), env_map)
+            if bitable_client is not None:
+                for item in active_accounts:
+                    try:
+                        bitable_client.append_summary(item, summary_meta)
+                    except Exception as exc:
+                        bitable_errors.append({
+                            "screen_name": item.get("screen_name", ""),
+                            "slot_key": str(summary_meta.get("slot_key", "")),
+                            "error": str(exc),
+                        })
         write_state(state)
         return {
             "delivered_count": 1 if active_accounts else 0,
@@ -1427,7 +1620,7 @@ def check_and_push(state: dict[str, Any], env_map: dict[str, str], apikey: str) 
                 for item in active_accounts
             ],
             "checked_accounts": len([item for item in state.get("accounts", []) if item.get("enabled", True)]),
-            "bitable_errors": [],
+            "bitable_errors": bitable_errors,
             "push_mode": push_mode,
             "slot_key": summary_meta["slot_key"],
             "window_label": summary_meta["window_label"],

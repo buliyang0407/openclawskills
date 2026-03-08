@@ -15,7 +15,7 @@ Use this skill when the user wants to:
 - preview the latest full post bodies from all monitored accounts
 - pause or resume X monitoring
 - receive detailed tweet notifications or periodic AI summary digests
-- optionally archive pushed tweets into a Feishu Bitable for later review
+- optionally archive pushed tweets or summary digests into a Feishu Bitable for later review
 
 ## Canonical Input Rule
 
@@ -134,7 +134,9 @@ The active production setup summarizes only the latest 4 hours, skips nighttime 
 - In summary mode, only summarize tweets inside the configured recent time window and avoid repeating the same slot twice.
 - In summary mode, summarize by account, count the tweets in the window, and list only the main themes or events rather than every single tweet.
 - The user may later ask to change summary time slots or add/remove monitored accounts; this skill should support both.
-- If `FEISHU_BITABLE_APP_TOKEN` is configured, delivered tweets may also be appended to a Feishu Bitable table. `FEISHU_BITABLE_TABLE_ID` is optional when the Base contains only one table.
+- If `FEISHU_BITABLE_APP_TOKEN` is configured, delivered tweets or summary digests may also be appended to a Feishu Bitable table.
+- The preferred production setup is the official `feishu-openclaw-plugin` with `/feishu auth` completed; `x-monitor` can then write to the user's Bitable via the plugin's stored user token.
+- `FEISHU_BITABLE_TABLE_ID` is optional when the Base contains only one table.
 - When the user asks for a test run or asks to see recent monitored content, prefer full post previews rather than headline-only summaries.
 - Never print or export the SocialData API key.
 - Never package `/etc/openclaw/x-monitor.env` with the skill export.
