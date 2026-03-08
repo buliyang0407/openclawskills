@@ -558,6 +558,8 @@ def render_digest(digests: list[dict[str, Any]]) -> str:
     lines = ["【阳仔二号公众号简报】"]
     for index, article in enumerate(entries, start=1):
         lines.append("")
+        lines.append(f"公众号：{article['account']}")
+        lines.append(f"公众号：{article['account']}")
         lines.append(f"{index}. 标题：{article['title']}")
         lines.append(f"发布时间：{iso_to_local_text(article.get('published', '')) if article.get('published') else '未知'}")
         lines.append(f"内容概述：{article['summary']}")
@@ -742,6 +744,50 @@ def render_digest(digests: list[dict[str, Any]]) -> str:
     for index, article in enumerate(entries, start=1):
         lines.append("")
         lines.append(f"{index}. 标题：{article['title']}")
+        lines.append(
+            f"发布时间：{iso_to_local_text(article.get('published', '')) if article.get('published') else '未知'}"
+        )
+        lines.append(f"内容概述：{article['summary']}")
+    return "\n".join(lines).strip()
+
+
+def preview_account(state: dict[str, Any], name: str, limit: int) -> str:
+    account = find_registered_account(state, name)
+    if account is None:
+        raise SystemExit(f"account not registered: {name}")
+    articles = fetch_articles(account, limit)
+    if not articles:
+        return "No recent articles found."
+    lines = [f"【预览】{account.get('name', '')}"]
+    for article in articles[:limit]:
+        lines.append("")
+        lines.append(article["title"])
+        if article.get("published"):
+            lines.append(iso_to_local_text(article["published"]))
+        if article.get("summary"):
+            lines.append(article["summary"])
+    return "\n".join(lines).strip()
+
+
+def render_digest(digests: list[dict[str, Any]]) -> str:
+    entries: list[dict[str, str]] = []
+    for digest in digests:
+        for article in digest["articles"]:
+            entries.append({
+                "title": article["title"],
+                "summary": article["summary"],
+                "published": article.get("published", ""),
+                "account": digest["account"],
+            })
+    entries.sort(
+        key=lambda item: parse_datetime(item.get("published", "")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    lines = ["【阳仔二号公众号简报】"]
+    for index, article in enumerate(entries, start=1):
+        lines.append("")
+        lines.append(f"{index}. 公众号：{article['account']}")
+        lines.append(f"标题：{article['title']}")
         lines.append(
             f"发布时间：{iso_to_local_text(article.get('published', '')) if article.get('published') else '未知'}"
         )
