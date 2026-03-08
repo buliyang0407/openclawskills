@@ -16,6 +16,7 @@ Use this skill when the user asks for realtime gold prices in:
 - pausing or resuming the hourly or threshold timers
 - checking whether the current gold automation is enabled
 - switching the delivery channel or target
+- optionally archiving pushed gold snapshots into a Feishu Bitable table
 
 ## Inputs
 
@@ -72,5 +73,6 @@ then keep threshold watch disabled unless explicitly requested, and keep only th
 - Always use Twelve Data quotes for both `XAU/USD` and `USD/CNY`.
 - Treat the fixed broadcast timer as `08:00 and 20:00`, not as a generic hourly schedule.
 - Use `openclaw message send` for outbound delivery so the target channel can be changed without rewriting the script.
+- If `FEISHU_BITABLE_APP_TOKEN` is configured, each pushed gold snapshot can also be appended to a Feishu Bitable table using the official `feishu-openclaw-plugin` user authorization.
 - Never package `/etc/openclaw/gold-rmb.env` with the skill export.
 - Never print or export the API key when showing config.

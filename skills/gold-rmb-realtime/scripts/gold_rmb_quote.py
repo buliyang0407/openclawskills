@@ -15,12 +15,22 @@ STATE_PATH = Path("/var/lib/openclaw/gold-rmb-watch-state.json")
 ENV_PATH = Path("/etc/openclaw/gold-rmb.env")
 WATCH_TIMER = "openclaw-gold-rmb-watch.timer"
 HOURLY_TIMER = "openclaw-gold-rmb-hourly.timer"
+OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
+BITABLE_NODE_HELPER_PATH = Path(__file__).with_name("feishu_bitable_uat.mjs")
 FIXED_BROADCAST_TIMES = ["08:00", "20:00"]
 DEFAULT_ENV = {
     "MOVE_THRESHOLD_CNY_PER_GRAM": "1.00",
     "MIN_PUSH_INTERVAL_SECONDS": "900",
     "DELIVERY_CHANNEL": "feishu",
 }
+BITABLE_FIELDS = (
+    "时间",
+    "国际金价",
+    "汇率",
+    "人民币/盎司",
+    "人民币/克",
+    "触发原因",
+)
 
 
 def load_env_file(path: Path) -> None:
@@ -65,6 +75,16 @@ def run_command(args: list[str], check: bool = True) -> subprocess.CompletedProc
 
 def run_systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return run_command(["systemctl", *args], check=check)
+
+
+def run_command_with_input(args: list[str], payload: str, check: bool = True) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PATH"] = "/root/.nvm/versions/node/v22.22.0/bin:" + env.get("PATH", "")
+    proc = subprocess.run(args, input=payload, capture_output=True, text=True, env=env)
+    if check and proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(f"command failed: {' '.join(args)} detail={detail}")
+    return proc
 
 
 def timer_state(unit: str) -> dict[str, str]:
@@ -169,6 +189,100 @@ def write_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_openclaw_feishu_account() -> dict[str, str]:
+    if not OPENCLAW_CONFIG_PATH.exists():
+        return {}
+    config = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
+    feishu = config.get("channels", {}).get("feishu", {})
+    default_account = feishu.get("defaultAccount", "main")
+    account_cfg = feishu.get("accounts", {}).get(default_account, {})
+    app_id = str(feishu.get("appId", "") or account_cfg.get("appId", "")).strip()
+    app_secret = str(feishu.get("appSecret", "") or account_cfg.get("appSecret", "")).strip()
+    domain = str(feishu.get("domain", "") or account_cfg.get("domain", "") or "feishu").strip()
+    if not app_id or not app_secret:
+        return {}
+    return {"app_id": app_id, "app_secret": app_secret, "domain": domain}
+
+
+def derive_bitable_user_open_id(env_map: dict[str, str]) -> str:
+    explicit = env_map.get("FEISHU_BITABLE_USER_OPEN_ID", "").strip()
+    if explicit:
+        return explicit
+    delivery_channel = env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]).strip().lower()
+    delivery_target = env_map.get("DELIVERY_TARGET", "").strip()
+    if delivery_channel == "feishu" and delivery_target.startswith("ou_"):
+        return delivery_target
+    return ""
+
+
+class FeishuPluginBitableClient:
+    def __init__(
+        self,
+        app_id: str,
+        app_secret: str,
+        app_token: str,
+        table_id: str | None,
+        user_open_id: str,
+        domain: str = "feishu",
+    ) -> None:
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.app_token = app_token
+        self.table_id = table_id or ""
+        self.user_open_id = user_open_id
+        self.domain = domain or "feishu"
+
+    def append_snapshot(self, snapshot: dict, reason: str) -> None:
+        if not BITABLE_NODE_HELPER_PATH.exists():
+            raise RuntimeError(f"Feishu Bitable helper not found: {BITABLE_NODE_HELPER_PATH}")
+        payload = {
+            "action": "append_record",
+            "appId": self.app_id,
+            "appSecret": self.app_secret,
+            "domain": self.domain,
+            "userOpenId": self.user_open_id,
+            "appToken": self.app_token,
+            "tableId": self.table_id,
+            "fieldNames": list(BITABLE_FIELDS),
+            "fields": {
+                "时间": time.strftime("%m-%d %H:%M", time.localtime(snapshot["observed_at"])),
+                "国际金价": f"{snapshot['usd_per_oz']:.4f} 美元/盎司",
+                "汇率": f"{snapshot['cny_per_usd']:.5f}",
+                "人民币/盎司": f"{snapshot['cny_per_oz']:.2f}",
+                "人民币/克": f"{snapshot['cny_per_g']:.2f}",
+                "触发原因": reason,
+            },
+        }
+        proc = run_command_with_input(
+            ["node", str(BITABLE_NODE_HELPER_PATH)],
+            json.dumps(payload, ensure_ascii=False),
+        )
+        data = json.loads(proc.stdout.strip() or "{}")
+        table_id = str(data.get("tableId", "")).strip()
+        if table_id:
+            self.table_id = table_id
+
+
+def bitable_client_from_env(env_map: dict[str, str]) -> FeishuPluginBitableClient | None:
+    app_token = env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()
+    if not app_token:
+        return None
+    creds = load_openclaw_feishu_account()
+    app_id = creds.get("app_id", "")
+    app_secret = creds.get("app_secret", "")
+    domain = creds.get("domain", "feishu")
+    user_open_id = derive_bitable_user_open_id(env_map)
+    table_id = env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()
+    if not app_id or not app_secret:
+        raise RuntimeError("Feishu Bitable plugin mode requires Feishu app credentials in openclaw.json")
+    if not user_open_id:
+        raise RuntimeError(
+            "Feishu Bitable plugin mode requires FEISHU_BITABLE_USER_OPEN_ID, "
+            "or a Feishu DELIVERY_TARGET that is a user open_id"
+        )
+    return FeishuPluginBitableClient(app_id, app_secret, app_token, table_id, user_open_id, domain)
+
+
 def should_push(curr: dict, prev: dict | None, threshold_g: float, min_interval: int) -> tuple[bool, str]:
     if prev is None:
         return True, "\u9996\u6b21\u4e0a\u7ebf\u64ad\u62a5"
@@ -197,6 +311,10 @@ def push_text(text: str) -> None:
 
 def push_snapshot(snapshot: dict, reason: str) -> None:
     snapshot["last_pushed_at"] = snapshot["observed_at"]
+    env_map = read_env_map(ENV_PATH)
+    bitable_client = bitable_client_from_env(env_map)
+    if bitable_client is not None:
+        bitable_client.append_snapshot(snapshot, reason)
     push_text(format_message(snapshot, reason))
     write_state(snapshot)
 
@@ -209,6 +327,9 @@ def show_config() -> int:
         "move_threshold_cny_per_gram": env_map.get("MOVE_THRESHOLD_CNY_PER_GRAM", DEFAULT_ENV["MOVE_THRESHOLD_CNY_PER_GRAM"]),
         "min_push_interval_seconds": env_map.get("MIN_PUSH_INTERVAL_SECONDS", DEFAULT_ENV["MIN_PUSH_INTERVAL_SECONDS"]),
         "api_key_configured": bool(env_map.get("TWELVEDATA_API_KEY", "")),
+        "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
+        "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
+        "bitable_user_open_id_configured": bool(derive_bitable_user_open_id(env_map)),
     }
     print(json.dumps(public_view, ensure_ascii=False, indent=2))
     return 0
@@ -225,6 +346,9 @@ def show_status() -> int:
         "fixed_broadcast_timer": timer_state(HOURLY_TIMER),
         "fixed_broadcast_times": FIXED_BROADCAST_TIMES,
         "api_key_configured": bool(env_map.get("TWELVEDATA_API_KEY", "")),
+        "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
+        "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
+        "bitable_user_open_id_configured": bool(derive_bitable_user_open_id(env_map)),
     }
     print(json.dumps(status, ensure_ascii=False, indent=2))
     return 0
