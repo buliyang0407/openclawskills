@@ -15,10 +15,10 @@ from urllib.request import Request, urlopen
 SOCIALDATA_BASE = "https://api.socialdata.tools/twitter"
 TRANSLATE_BASE = "https://translate.googleapis.com/translate_a/single"
 FEISHU_BASE = "https://open.feishu.cn/open-apis"
-ENV_PATH = Path("/etc/openclaw/x-monitor.env")
-STATE_PATH = Path("/var/lib/openclaw/x-monitor/state.json")
-OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
-WATCH_TIMER = "openclaw-x-monitor.timer"
+DEFAULT_ENV_PATH = Path("/etc/openclaw/x-monitor.env")
+DEFAULT_STATE_PATH = Path("/var/lib/openclaw/x-monitor/state.json")
+DEFAULT_OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
+DEFAULT_WATCH_TIMER = "openclaw-x-monitor.timer"
 BITABLE_NODE_HELPER_PATH = Path(__file__).with_name("feishu_bitable_uat.mjs")
 DEFAULT_ENV = {
     "DELIVERY_CHANNEL": "feishu",
@@ -54,6 +54,40 @@ BITABLE_SUMMARY_FIELDS = (
     "发了什么",
     "核心意思",
 )
+
+
+def current_env_path() -> Path:
+    return Path(os.environ.get("X_MONITOR_ENV_PATH", str(DEFAULT_ENV_PATH)))
+
+
+def current_state_path() -> Path:
+    return Path(os.environ.get("X_MONITOR_STATE_PATH", str(DEFAULT_STATE_PATH)))
+
+
+def current_watch_timer() -> str:
+    return os.environ.get("X_MONITOR_TIMER_UNIT", DEFAULT_WATCH_TIMER).strip() or DEFAULT_WATCH_TIMER
+
+
+def current_openclaw_profile() -> str:
+    return os.environ.get("OPENCLAW_PROFILE", "").strip()
+
+
+def current_openclaw_config_path() -> Path:
+    explicit = os.environ.get("OPENCLAW_CONFIG_PATH", "").strip()
+    if explicit:
+        return Path(explicit)
+    profile = current_openclaw_profile()
+    if profile:
+        return Path(f"/root/.openclaw-{profile}/openclaw.json")
+    return DEFAULT_OPENCLAW_CONFIG_PATH
+
+
+def openclaw_cli_args() -> list[str]:
+    args = ["openclaw"]
+    profile = current_openclaw_profile()
+    if profile:
+        args.extend(["--profile", profile])
+    return args
 
 
 def load_env_file(path: Path) -> None:
@@ -238,20 +272,23 @@ def socialdata_user_tweets(user_id: str, apikey: str, limit: int) -> list[dict[s
 
 
 def read_state() -> dict[str, Any]:
-    if not STATE_PATH.exists():
+    state_path = current_state_path()
+    if not state_path.exists():
         return {"accounts": []}
-    return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    return json.loads(state_path.read_text(encoding="utf-8"))
 
 
 def write_state(state: dict[str, Any]) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    state_path = current_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_openclaw_feishu_account() -> dict[str, str]:
-    if not OPENCLAW_CONFIG_PATH.exists():
+    config_path = current_openclaw_config_path()
+    if not config_path.exists():
         return {}
-    config = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     feishu = config.get("channels", {}).get("feishu", {})
     main = feishu.get("accounts", {}).get(feishu.get("defaultAccount", "main"), {})
     app_id = str(feishu.get("appId", "") or main.get("appId", "")).strip()
@@ -545,7 +582,7 @@ def parse_json_object(text: str) -> Any:
 
 def run_lobster_json(prompt: str, timeout_seconds: int = 120) -> Any:
     proc = run_command([
-        "openclaw",
+        *openclaw_cli_args(),
         "--no-color",
         "agent",
         "--agent",
@@ -963,7 +1000,9 @@ def push_text(text: str, env_map: dict[str, str]) -> None:
     if not target:
         raise SystemExit("DELIVERY_TARGET not configured")
     run_command([
-        "openclaw", "message", "send",
+        *openclaw_cli_args(),
+        "message",
+        "send",
         "--channel", channel,
         "--target", target,
         "--message", text,
@@ -1320,7 +1359,9 @@ def public_config(env_map: dict[str, str]) -> dict[str, Any]:
 
 def show_status(state: dict[str, Any], env_map: dict[str, str]) -> dict[str, Any]:
     payload = public_config(env_map)
-    payload["watch_timer"] = timer_state(WATCH_TIMER)
+    payload["watch_timer"] = timer_state(current_watch_timer())
+    payload["openclaw_profile"] = current_openclaw_profile() or "default"
+    payload["openclaw_config_path"] = str(current_openclaw_config_path())
     payload["last_summary_slot"] = state.get("summary", {}).get("last_slot_end", "")
     payload["monitored_accounts"] = [
         {
@@ -1434,7 +1475,7 @@ def set_config(
         changed = True
     if not changed:
         raise SystemExit("no config changes requested")
-    write_env_map(ENV_PATH, env_map)
+    write_env_map(current_env_path(), env_map)
     return public_config(env_map)
 
 
@@ -1650,9 +1691,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    load_env_file(ENV_PATH)
+    load_env_file(current_env_path())
     args = parse_args()
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     state = read_state()
 
     if args.show_config:
@@ -1665,10 +1706,10 @@ def main() -> int:
         print(json.dumps(list_accounts(state), ensure_ascii=False, indent=2))
         return 0
     if args.pause_watch:
-        print(json.dumps(control_timer(WATCH_TIMER, "pause"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_watch_timer(), "pause"), ensure_ascii=False, indent=2))
         return 0
     if args.resume_watch:
-        print(json.dumps(control_timer(WATCH_TIMER, "resume"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_watch_timer(), "resume"), ensure_ascii=False, indent=2))
         return 0
     if any(v is not None for v in [
         args.set_delivery_channel,

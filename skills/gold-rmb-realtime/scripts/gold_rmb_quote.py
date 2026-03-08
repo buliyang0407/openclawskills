@@ -11,11 +11,11 @@ from urllib.request import Request, urlopen
 
 API_BASE = "https://api.twelvedata.com/quote"
 OZ_TO_GRAMS = 31.1034768
-STATE_PATH = Path("/var/lib/openclaw/gold-rmb-watch-state.json")
-ENV_PATH = Path("/etc/openclaw/gold-rmb.env")
-WATCH_TIMER = "openclaw-gold-rmb-watch.timer"
-HOURLY_TIMER = "openclaw-gold-rmb-hourly.timer"
-OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
+DEFAULT_STATE_PATH = Path("/var/lib/openclaw/gold-rmb-watch-state.json")
+DEFAULT_ENV_PATH = Path("/etc/openclaw/gold-rmb.env")
+DEFAULT_WATCH_TIMER = "openclaw-gold-rmb-watch.timer"
+DEFAULT_HOURLY_TIMER = "openclaw-gold-rmb-hourly.timer"
+DEFAULT_OPENCLAW_CONFIG_PATH = Path("/root/.openclaw/openclaw.json")
 BITABLE_NODE_HELPER_PATH = Path(__file__).with_name("feishu_bitable_uat.mjs")
 FIXED_BROADCAST_TIMES = ["08:00", "20:00"]
 DEFAULT_ENV = {
@@ -31,6 +31,44 @@ BITABLE_FIELDS = (
     "人民币/克",
     "触发原因",
 )
+
+
+def current_env_path() -> Path:
+    return Path(os.environ.get("GOLD_RMB_ENV_PATH", str(DEFAULT_ENV_PATH)))
+
+
+def current_state_path() -> Path:
+    return Path(os.environ.get("GOLD_RMB_STATE_PATH", str(DEFAULT_STATE_PATH)))
+
+
+def current_watch_timer() -> str:
+    return os.environ.get("GOLD_RMB_WATCH_TIMER_UNIT", DEFAULT_WATCH_TIMER).strip() or DEFAULT_WATCH_TIMER
+
+
+def current_hourly_timer() -> str:
+    return os.environ.get("GOLD_RMB_HOURLY_TIMER_UNIT", DEFAULT_HOURLY_TIMER).strip() or DEFAULT_HOURLY_TIMER
+
+
+def current_openclaw_profile() -> str:
+    return os.environ.get("OPENCLAW_PROFILE", "").strip()
+
+
+def current_openclaw_config_path() -> Path:
+    explicit = os.environ.get("OPENCLAW_CONFIG_PATH", "").strip()
+    if explicit:
+        return Path(explicit)
+    profile = current_openclaw_profile()
+    if profile:
+        return Path(f"/root/.openclaw-{profile}/openclaw.json")
+    return DEFAULT_OPENCLAW_CONFIG_PATH
+
+
+def openclaw_cli_args() -> list[str]:
+    args = ["openclaw"]
+    profile = current_openclaw_profile()
+    if profile:
+        args.extend(["--profile", profile])
+    return args
 
 
 def load_env_file(path: Path) -> None:
@@ -179,20 +217,23 @@ def format_message(s: dict, reason: str) -> str:
 
 
 def read_state() -> dict | None:
-    if not STATE_PATH.exists():
+    state_path = current_state_path()
+    if not state_path.exists():
         return None
-    return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    return json.loads(state_path.read_text(encoding="utf-8"))
 
 
 def write_state(state: dict) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    state_path = current_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_openclaw_feishu_account() -> dict[str, str]:
-    if not OPENCLAW_CONFIG_PATH.exists():
+    config_path = current_openclaw_config_path()
+    if not config_path.exists():
         return {}
-    config = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     feishu = config.get("channels", {}).get("feishu", {})
     default_account = feishu.get("defaultAccount", "main")
     account_cfg = feishu.get("accounts", {}).get(default_account, {})
@@ -296,13 +337,15 @@ def should_push(curr: dict, prev: dict | None, threshold_g: float, min_interval:
 
 
 def push_text(text: str) -> None:
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     channel = env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]).strip()
     target = env_map.get("DELIVERY_TARGET", "").strip()
     if not target:
         raise SystemExit("DELIVERY_TARGET \u672a\u914d\u7f6e")
     run_command([
-        "openclaw", "message", "send",
+        *openclaw_cli_args(),
+        "message",
+        "send",
         "--channel", channel,
         "--target", target,
         "--message", text,
@@ -311,7 +354,7 @@ def push_text(text: str) -> None:
 
 def push_snapshot(snapshot: dict, reason: str) -> None:
     snapshot["last_pushed_at"] = snapshot["observed_at"]
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     bitable_client = bitable_client_from_env(env_map)
     if bitable_client is not None:
         bitable_client.append_snapshot(snapshot, reason)
@@ -320,7 +363,7 @@ def push_snapshot(snapshot: dict, reason: str) -> None:
 
 
 def show_config() -> int:
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     public_view = {
         "delivery_channel": env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]),
         "delivery_target": env_map.get("DELIVERY_TARGET", ""),
@@ -330,20 +373,22 @@ def show_config() -> int:
         "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
         "bitable_table_id_configured": bool(env_map.get("FEISHU_BITABLE_TABLE_ID", "").strip()),
         "bitable_user_open_id_configured": bool(derive_bitable_user_open_id(env_map)),
+        "openclaw_profile": current_openclaw_profile() or "default",
+        "openclaw_config_path": str(current_openclaw_config_path()),
     }
     print(json.dumps(public_view, ensure_ascii=False, indent=2))
     return 0
 
 
 def show_status() -> int:
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     status = {
         "delivery_channel": env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]),
         "delivery_target": env_map.get("DELIVERY_TARGET", ""),
         "move_threshold_cny_per_gram": env_map.get("MOVE_THRESHOLD_CNY_PER_GRAM", DEFAULT_ENV["MOVE_THRESHOLD_CNY_PER_GRAM"]),
         "min_push_interval_seconds": env_map.get("MIN_PUSH_INTERVAL_SECONDS", DEFAULT_ENV["MIN_PUSH_INTERVAL_SECONDS"]),
-        "watch_timer": timer_state(WATCH_TIMER),
-        "fixed_broadcast_timer": timer_state(HOURLY_TIMER),
+        "watch_timer": timer_state(current_watch_timer()),
+        "fixed_broadcast_timer": timer_state(current_hourly_timer()),
         "fixed_broadcast_times": FIXED_BROADCAST_TIMES,
         "api_key_configured": bool(env_map.get("TWELVEDATA_API_KEY", "")),
         "bitable_enabled": bool(env_map.get("FEISHU_BITABLE_APP_TOKEN", "").strip()),
@@ -355,7 +400,7 @@ def show_status() -> int:
 
 
 def set_config(*, threshold: float | None, min_interval: int | None, delivery_channel: str | None, delivery_target: str | None) -> int:
-    env_map = read_env_map(ENV_PATH)
+    env_map = read_env_map(current_env_path())
     changed = False
     if threshold is not None:
         if threshold < 0:
@@ -375,8 +420,9 @@ def set_config(*, threshold: float | None, min_interval: int | None, delivery_ch
         changed = True
     if not changed:
         raise SystemExit("\u6ca1\u6709\u4f20\u5165\u9700\u8981\u4fee\u6539\u7684\u914d\u7f6e")
-    write_env_map(ENV_PATH, env_map)
-    os.chmod(ENV_PATH, 0o600)
+    env_path = current_env_path()
+    write_env_map(env_path, env_map)
+    os.chmod(env_path, 0o600)
     print(json.dumps({
         "delivery_channel": env_map.get("DELIVERY_CHANNEL", DEFAULT_ENV["DELIVERY_CHANNEL"]),
         "delivery_target": env_map.get("DELIVERY_TARGET", ""),
@@ -387,7 +433,7 @@ def set_config(*, threshold: float | None, min_interval: int | None, delivery_ch
 
 
 def main() -> int:
-    load_env_file(ENV_PATH)
+    load_env_file(current_env_path())
     parser = argparse.ArgumentParser(description="Realtime gold RMB quote watcher")
     parser.add_argument("--json", action="store_true", help="Print current snapshot as JSON")
     parser.add_argument("--push-once", action="store_true", help="Force one outbound push and update state")
@@ -417,16 +463,16 @@ def main() -> int:
             delivery_target=args.set_delivery_target,
         )
     if args.pause_watch:
-        print(json.dumps(control_timer(WATCH_TIMER, "pause"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_watch_timer(), "pause"), ensure_ascii=False, indent=2))
         return 0
     if args.resume_watch:
-        print(json.dumps(control_timer(WATCH_TIMER, "resume"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_watch_timer(), "resume"), ensure_ascii=False, indent=2))
         return 0
     if args.pause_hourly:
-        print(json.dumps(control_timer(HOURLY_TIMER, "pause"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_hourly_timer(), "pause"), ensure_ascii=False, indent=2))
         return 0
     if args.resume_hourly:
-        print(json.dumps(control_timer(HOURLY_TIMER, "resume"), ensure_ascii=False, indent=2))
+        print(json.dumps(control_timer(current_hourly_timer(), "resume"), ensure_ascii=False, indent=2))
         return 0
 
     apikey = os.environ.get("TWELVEDATA_API_KEY", "").strip()
