@@ -200,6 +200,19 @@ async function appendRecord(req) {
   };
 }
 
+async function listTablesAction(req) {
+  const accessToken = await getValidAccessToken(req);
+  const items = await listTables(req, accessToken);
+  return {
+    ok: true,
+    items: items.map((item) => ({
+      tableId: String(item.table_id || ""),
+      name: String(item.name || ""),
+      revision: Number(item.revision || 0),
+    })),
+  };
+}
+
 async function main() {
   const raw = await readStdin();
   if (!raw) {
@@ -209,6 +222,8 @@ async function main() {
   let result;
   if (req.action === "append_record") {
     result = await appendRecord(req);
+  } else if (req.action === "list_tables") {
+    result = await listTablesAction(req);
   } else {
     throw new Error(`unsupported_action:${req.action || ""}`);
   }
