@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -298,7 +299,11 @@ class FeishuPluginBitableClient:
             ["node", str(BITABLE_NODE_HELPER_PATH)],
             json.dumps(payload, ensure_ascii=False),
         )
-        data = json.loads(proc.stdout.strip() or "{}")
+        stdout = proc.stdout.strip()
+        if not stdout:
+            stderr = proc.stderr.strip()
+            raise RuntimeError(f"bitable helper returned empty stdout{': ' + stderr if stderr else ''}")
+        data = json.loads(stdout)
         table_id = str(data.get("tableId", "")).strip()
         if table_id:
             self.table_id = table_id
@@ -357,7 +362,11 @@ def push_snapshot(snapshot: dict, reason: str) -> None:
     env_map = read_env_map(current_env_path())
     bitable_client = bitable_client_from_env(env_map)
     if bitable_client is not None:
-        bitable_client.append_snapshot(snapshot, reason)
+        try:
+            bitable_client.append_snapshot(snapshot, reason)
+        except Exception as exc:
+            # Do not block user-facing alerts when Bitable archival has a transient issue.
+            print(f"[gold-rmb] bitable append failed: {exc}", file=sys.stderr)
     push_text(format_message(snapshot, reason))
     write_state(snapshot)
 
