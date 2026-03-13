@@ -1,154 +1,222 @@
 # openclawskills
 
-这是一个给 OpenClaw 使用的个人技能仓库，目前包含两套技能：
+这是一个面向 OpenClaw 多虾协同架构的技能仓库。
 
+英文版说明：
+
+- [README.md](README.md)
+
+## 这个仓库是干什么的
+
+这个仓库保存的是一套可迁移、可复用的 OpenClaw 能力层，主要包括：
+
+- `skills/`：可直接复用的技能
+- `shared-awareness/`：共享认知文件
+- `workspace-seeds/`：工作区种子文件
+
+它对应的是一套分工明确的龙虾团队架构：
+
+- `main`：主管虾，负责调度
+- `info`：信息虾，负责外部即时检索
+- `knowledge`：知识库虾，负责长期记忆
+- `writer`：图文虾，负责内容生产
+- `rescue`：运维虾，负责巡检与恢复
+
+## 命名规则
+
+所有以 `BLY-` 开头的技能，都是这套体系里的自建技能。
+
+例如：
+
+- `BLY-info-search-planner`
+- `BLY-info-search-executor`
+- `BLY-info-source-verifier`
+- `BLY-info-news-verifier`
+- `BLY-info-evidence-pack`
+
+这样做的目的很简单：
+
+- 一眼区分哪些是自己的技能
+- 一眼区分哪些是外部借鉴或改造的技能
+
+## 当前包含的技能
+
+### 信息检索层
+
+- `BLY-info-search-planner`
+  - 把模糊问题拆成结构化检索计划
+- `BLY-info-search-executor`
+  - 执行真实检索，默认优先 `web_search`
+- `BLY-info-source-verifier`
+  - 判断来源是否可靠、是否够资格支撑结论
+- `BLY-info-news-verifier`
+  - 专门处理“最近 / 最新 / 今天 / 当前”这类时效型问题
+- `BLY-info-evidence-pack`
+  - 把可用证据整理成标准交付包
 - `gold-rmb-realtime`
+  - 金价与汇率相关即时查询
 - `x-monitor`
+  - X 账号监控
+- `wechat-official-monitor`
+  - 公众号监控能力，当前更适合手工启用
 
-## 技能说明
+### 知识库层
 
-### 1. `gold-rmb-realtime`
+- `wechat-article-capture`
+  - 文章抓取与入库
+- `article-knowledge-manager`
+  - 文章级知识检索与管理
+- `knowledge-base-manager`
+  - 知识库维护与长期记忆支持
 
-用途：
+### 写作与交付层
 
-- 查询实时人民币金价
-- 输出 `人民币元/盎司`
-- 输出 `人民币元/克`
-- 支持固定时间播报
-- 支持阈值提醒
+- `general-material-pack`
+  - 通用素材包与短文成稿
+- `feishu-cloud-doc`
+  - 飞书云文档创建与更新
+- `runninghub-image`
+  - 生图能力，供图文虾调用
 
-当前设计重点：
+### 运维层
 
-- 固定播报时间是 `08:00` 和 `20:00`
-- 不应被理解成“每小时播报”
-- 使用 `openclaw message send` 发消息，方便切换到飞书等渠道
+- `lobster-supervisor`
+  - 服务、timer、端口、健康检查与恢复辅助
 
-依赖：
+### 公共层
 
-- `python3`
-- `systemctl`
-- `openclaw`
-- `/etc/openclaw/gold-rmb.env`
+- `common/`
+  - 多个技能共享的辅助脚本
 
-环境变量示例：
+## 仓库结构
 
-```env
-TWELVEDATA_API_KEY=your_key
-DELIVERY_CHANNEL=feishu
-DELIVERY_TARGET=ou_xxx
-MOVE_THRESHOLD_CNY_PER_GRAM=50.00
-MIN_PUSH_INTERVAL_SECONDS=43200
+```text
+openclawskills/
+├─ skills/
+│  ├─ BLY-info-search-planner/
+│  ├─ BLY-info-search-executor/
+│  ├─ BLY-info-source-verifier/
+│  ├─ BLY-info-news-verifier/
+│  ├─ BLY-info-evidence-pack/
+│  ├─ general-material-pack/
+│  ├─ feishu-cloud-doc/
+│  ├─ runninghub-image/
+│  ├─ article-knowledge-manager/
+│  ├─ knowledge-base-manager/
+│  ├─ wechat-article-capture/
+│  ├─ gold-rmb-realtime/
+│  ├─ x-monitor/
+│  ├─ lobster-supervisor/
+│  └─ common/
+├─ shared-awareness/
+└─ workspace-seeds/
 ```
 
-### 2. `x-monitor`
+## 推荐架构
 
-用途：
+### 角色分工
 
-- 监控指定 X.com 账号的新帖子
-- 支持新增、删除、查看、预览监控账号
-- 支持中英双语通知
-- 能区分原创、回复、引用、转发
-- 对引用和转发，会尽量把原帖内容一起带上
+- `main`：只调度，不自己承载具体业务
+- `info`：只检索，不入库
+- `knowledge`：只做记忆层、档案层、知识库层
+- `writer`：只做内容生产与交付
+- `rescue`：只做运维与自愈
 
-当前设计重点：
+### `info` 推荐检索链路
 
-- 默认每小时轮询一次
-- 每个账号每次只拉最近少量帖子，控制 API 消耗
-- 新增账号时只从“当前最新帖”开始，不会把历史帖子一次性灌出来
+对开放网络检索，推荐固定走这条链：
 
-依赖：
+1. `BLY-info-search-planner`
+2. `BLY-info-search-executor`
+3. `BLY-info-source-verifier`
+4. `BLY-info-news-verifier`（仅时效型问题）
+5. `BLY-info-evidence-pack`
 
-- `python3`
-- `systemctl`
-- `openclaw`
-- `/etc/openclaw/x-monitor.env`
+### 推荐执行原则
 
-环境变量示例：
+- 默认优先 `web_search`
+- 用 `web_fetch` 深读候选页面
+- DDG 只做兜底
+- 默认不使用国内通用搜索引擎
+- 优先官网、官方文档、官方仓库、官方公告、可信国际媒体
+- 证据不足时，明确说不足，不要硬编
 
-```env
-SOCIALDATA_API_KEY=your_key
-DELIVERY_CHANNEL=feishu
-DELIVERY_TARGET=ou_xxx
-POLL_LIMIT=5
-TRANSLATE_ENABLED=true
-```
+## 在新机器上怎么用
 
-## 如何安装到 OpenClaw
-
-下面假设你的 OpenClaw 工作目录在：
+### 方式一：克隆整个仓库
 
 ```bash
-/root/.openclaw/workspace
-```
-
-### 方式一：直接克隆整个仓库
-
-```bash
-cd /root/.openclaw/workspace
 git clone https://github.com/buliyang0407/openclawskills.git
 ```
 
-然后把具体技能拷贝到 OpenClaw 的 `skills` 目录：
+然后把需要的技能拷贝到 OpenClaw 工作区：
 
 ```bash
-mkdir -p /root/.openclaw/workspace/skills
-cp -r /root/.openclaw/workspace/openclawskills/skills/gold-rmb-realtime /root/.openclaw/workspace/skills/
-cp -r /root/.openclaw/workspace/openclawskills/skills/x-monitor /root/.openclaw/workspace/skills/
+mkdir -p /path/to/openclaw/workspace/skills
+cp -r openclawskills/skills/BLY-info-search-planner /path/to/openclaw/workspace/skills/
+cp -r openclawskills/skills/BLY-info-search-executor /path/to/openclaw/workspace/skills/
+cp -r openclawskills/skills/BLY-info-source-verifier /path/to/openclaw/workspace/skills/
+cp -r openclawskills/skills/BLY-info-news-verifier /path/to/openclaw/workspace/skills/
+cp -r openclawskills/skills/BLY-info-evidence-pack /path/to/openclaw/workspace/skills/
 ```
 
-### 方式二：只拷贝某一个技能
+### 方式二：只取需要的 skill
 
-例如只装 `x-monitor`：
+例如只装一个：
 
 ```bash
-mkdir -p /root/.openclaw/workspace/skills/x-monitor
-cp -r skills/x-monitor/* /root/.openclaw/workspace/skills/x-monitor/
+mkdir -p /path/to/openclaw/workspace/skills/BLY-info-search-planner
+cp -r skills/BLY-info-search-planner/* /path/to/openclaw/workspace/skills/BLY-info-search-planner/
 ```
 
-## 安装后怎么验证
+## 哪些内容会放进仓库，哪些不会
 
-### 验证 skill 是否被 OpenClaw 识别
+仓库中会保留：
+
+- `SKILL.md`
+- `scripts/`
+- `templates/`
+- `references/`
+- `workspace-seeds/`
+- `shared-awareness/`
+
+仓库中不会保留：
+
+- `/etc/openclaw/*.env`
+- token、app secret、私钥
+- 生产环境里的目标 ID
+- 运行中的状态数据
+
+## 自测
+
+部分自建技能带有轻量自测。
+
+例如：
 
 ```bash
-openclaw skills info gold-rmb-realtime
-openclaw skills info x-monitor
+python skills/BLY-info-suite-selftest.py
 ```
 
-### 验证金价 skill
+这会检查：
 
-```bash
-python3 /root/.openclaw/workspace/skills/gold-rmb-realtime/scripts/gold_rmb_quote.py --show-status
-```
+- frontmatter 名称是否一致
+- 是否包含 workflow / output section
+- 是否带模板
+- 是否至少有 3 条 eval
 
-### 验证 X 监控 skill
+## 这个仓库接下来适合怎么发展
 
-```bash
-python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --show-status
-python3 /root/.openclaw/workspace/skills/x-monitor/scripts/x_monitor.py --preview-account @elonmusk --limit 3
-```
+- 继续往里加 `BLY-*` 自建技能
+- 让技能小而清晰，而不是堆成一个超级大 skill
+- 把生产 secrets 永远留在仓库外
+- 把这套多虾架构做成可以迁移到新机器的能力层
 
-## 重要注意事项
+## 为什么要做这个仓库
 
-1. 不要把 `/etc/openclaw/*.env` 上传到 GitHub。
-2. 不要把任何 API key、飞书目标 ID、服务器私钥一起提交。
-3. 技能仓库只保存：
-   - `SKILL.md`
-   - `scripts/`
-   - `references/`
-4. 运行时配置应该单独放在服务器上。
+目标很直接：
 
-## 建议的目录结构
+- 把真实生产环境里有价值的能力沉淀下来
+- 让未来换机器、换服务器、换环境时更容易迁移
+- 让这套“龙虾团队”分工体系更清楚、更可复用
 
-```text
-skills/
-├─ gold-rmb-realtime/
-│  ├─ SKILL.md
-│  └─ scripts/
-│     └─ gold_rmb_quote.py
-└─ x-monitor/
-   ├─ SKILL.md
-   ├─ scripts/
-   │  └─ x_monitor.py
-   └─ references/
-      └─ api_notes.md
-```
+如果这些内容对你有帮助，欢迎点个 star。

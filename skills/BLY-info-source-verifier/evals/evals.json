@@ -1,0 +1,20 @@
+{
+  "skill_name": "BLY-info-source-verifier",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "搜索结果只有两个泛 AI 页面和一个无关标题页，请判断这些来源是否足以支持 Nano Banana 的正式介绍稿。",
+      "expected_output": "The verifier should downgrade the sources, keep no fake definition, and return not_ready with low confidence."
+    },
+    {
+      "id": 2,
+      "prompt": "已找到官方文档、官方 GitHub 和一篇主流技术媒体的介绍，请判断是否可以支持 Codex 的功能介绍稿。",
+      "expected_output": "The verifier should keep official sources as Tier A, media as Tier B, and return ready_for_formal_answer."
+    },
+    {
+      "id": 3,
+      "prompt": "有三篇媒体报道，但没有官方声明，主题是突发国际事件，请判断能否继续输出总结。",
+      "expected_output": "The verifier should allow ready_with_caution if the sources are independent and consistent, with dates and open questions preserved."
+    }
+  ]
+}

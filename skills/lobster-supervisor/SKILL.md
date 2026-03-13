@@ -12,6 +12,23 @@ Use this skill when the user wants to:
 - let a supervisor job attempt safe restarts before escalating
 - inspect current runtime health from the server
 
+## Natural Language Shortcuts
+
+Treat these user requests as direct supervisor checks:
+
+- `现在其他三只虾运行如何`
+- `主管虾，查一下所有虾状态`
+- `谁挂了`
+- `现在服务都正常吗`
+
+For these requests:
+
+1. run `lobster_supervisor.py --show-status`
+2. summarize based on returned target results
+3. if asked to fix, run `--check-once` with auto-heal
+
+Do not use `sessions_list` or `subagents list` as fleet health evidence. Those only show session/agent context, not server runtime health.
+
 ## Runtime Files
 
 Environment file:
@@ -68,6 +85,10 @@ The first production version checks:
 - `openclaw-yangzai2.service`
 - `openclaw-wechat-official-monitor-yangzai2.timer`
 - second OpenClaw gateway port `127.0.0.1:19011`
+- `openclaw-yangzai3.service`
+- third OpenClaw gateway port `127.0.0.1:19031`
+- `openclaw-yangzai-admin.service`
+- supervisor OpenClaw gateway port `127.0.0.1:19021`
 - `Wechat2RSS` on `127.0.0.1:18080`
 
 ## Delivery Model

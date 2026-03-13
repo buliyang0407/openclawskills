@@ -1,0 +1,20 @@
+{
+  "skill_name": "BLY-info-news-verifier",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "核验一组关于特朗普和伊朗最近动态的新闻来源，避免把旧背景当成最新消息。",
+      "expected_output": "The verifier should extract dates, distinguish article date vs event date, and return a cautious or safe time judgment."
+    },
+    {
+      "id": 2,
+      "prompt": "核验一组 AI 产品发布报道，用户问的是‘最新发布’，请判断时间是否安全。",
+      "expected_output": "The verifier should check recency and flag sources that are older background rather than the latest release."
+    },
+    {
+      "id": 3,
+      "prompt": "核验一组 undated 或日期冲突的时事来源。",
+      "expected_output": "The verifier should return time_not_safe and list the date risks clearly."
+    }
+  ]
+}

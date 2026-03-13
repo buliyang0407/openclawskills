@@ -322,6 +322,56 @@ def find_account(state: dict[str, Any], identifier: str) -> dict[str, Any] | Non
     return None
 
 
+def account_lookup_key(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return normalize_key(text)
+    except SystemExit:
+        return text.lstrip("@").strip().lower()
+
+
+def account_match_tokens(account: dict[str, Any]) -> list[str]:
+    tokens: list[str] = []
+    for value in (
+        account.get("user_id", ""),
+        account.get("screen_name", ""),
+        account.get("alias", ""),
+        account.get("name", ""),
+    ):
+        text = str(value or "").strip().lower()
+        if text:
+            tokens.append(text)
+            if text.startswith("@"):
+                tokens.append(text.lstrip("@"))
+    return tokens
+
+
+def resolve_account(state: dict[str, Any], identifier: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    key = account_lookup_key(identifier)
+    if not key:
+        return (None, [])
+    exact: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    for account in state.get("accounts", []):
+        tokens = account_match_tokens(account)
+        if any(token == key for token in tokens):
+            exact.append(account)
+            continue
+        if len(key) >= 2 and any(key in token for token in tokens):
+            partial.append(account)
+    if len(exact) == 1:
+        return (exact[0], [])
+    if len(exact) > 1:
+        return (None, exact)
+    if len(partial) == 1:
+        return (partial[0], [])
+    if len(partial) > 1:
+        return (None, partial)
+    return (None, [])
+
+
 def local_timestamp(ts: float | int | None = None) -> str:
     if ts is None:
         ts = time.time()
@@ -1316,7 +1366,14 @@ def add_account(state: dict[str, Any], apikey: str, identifier: str, alias: str 
 
 
 def remove_account(state: dict[str, Any], identifier: str) -> dict[str, Any]:
-    account = find_account(state, identifier)
+    account, candidates = resolve_account(state, identifier)
+    if account is None and candidates:
+        choices = ", ".join(
+            f"@{item.get('screen_name', '')}"
+            for item in candidates
+            if str(item.get("screen_name", "")).strip()
+        )
+        raise SystemExit(f"account identifier is ambiguous: {identifier}; candidates: {choices}")
     if account is None:
         raise SystemExit(f"account not found: {identifier}")
     state["accounts"] = [item for item in state.get("accounts", []) if item is not account]

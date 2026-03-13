@@ -52,7 +52,15 @@ def derive_bitable_user_open_id(env_map: dict[str, str], delivery_channel: str, 
 def run_command_with_input(args: list[str], payload: str, check: bool = True) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["PATH"] = "/root/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:" + env.get("PATH", "")
-    proc = subprocess.run(args, input=payload, capture_output=True, text=True, env=env)
+    proc = subprocess.run(
+        args,
+        input=payload,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
         raise RuntimeError(f"command failed: {' '.join(args)} detail={detail}")
@@ -103,6 +111,32 @@ class FeishuPluginBitableClient:
         if table_id:
             self.table_id = table_id
         return str(data.get("recordId", "")).strip()
+
+    def update_record(self, record_id: str, fields: dict[str, str], field_names: tuple[str, ...]) -> str:
+        if not BITABLE_NODE_HELPER_PATH.exists():
+            raise RuntimeError(f"Feishu Bitable helper not found: {BITABLE_NODE_HELPER_PATH}")
+        payload = {
+            "action": "update_record",
+            "appId": self.app_id,
+            "appSecret": self.app_secret,
+            "domain": self.domain,
+            "userOpenId": self.user_open_id,
+            "appToken": self.app_token,
+            "tableId": self.table_id,
+            "tableName": self.table_name,
+            "recordId": record_id,
+            "fieldNames": list(field_names),
+            "fields": fields,
+        }
+        proc = run_command_with_input(
+            ["node", str(BITABLE_NODE_HELPER_PATH)],
+            json.dumps(payload, ensure_ascii=False),
+        )
+        data = json.loads(proc.stdout.strip() or "{}")
+        table_id = str(data.get("tableId", "")).strip()
+        if table_id:
+            self.table_id = table_id
+        return str(data.get("recordId", record_id)).strip()
 
 
 def bitable_client_from_env(

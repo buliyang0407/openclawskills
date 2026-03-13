@@ -1,0 +1,8 @@
+{
+  "name": "wechat-article-capture",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "skill_name": "BLY-info-search-planner",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我搜一下 nano banana 是什么，给我后面写文章用。",
+      "expected_output": "A query pack that treats the topic as ambiguous, prioritizes official discovery, includes disambiguation lanes, and defines stop conditions."
+    },
+    {
+      "id": 2,
+      "prompt": "查一下 OpenAI Codex 现在能做什么，后面我要写一篇 1000 字介绍。",
+      "expected_output": "A query pack for product/tool lookup with official, docs, release, and trusted-media lanes."
+    },
+    {
+      "id": 3,
+      "prompt": "看看最近特朗普和伊朗有什么新动态。",
+      "expected_output": "A news/event query pack focused on latest developments, official statements, timeline checks, and trusted media cross-checking."
+    }
+  ]
+}

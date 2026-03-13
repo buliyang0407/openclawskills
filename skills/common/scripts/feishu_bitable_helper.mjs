@@ -121,6 +121,19 @@ async function createTable(req, accessToken) {
   return String(tableId);
 }
 
+async function createTableAction(req) {
+  if (!req.tableName) {
+    throw new Error("bitable_requires_explicit_table_id");
+  }
+  const accessToken = await getValidAccessToken(req);
+  const tableId = await createTable(req, accessToken);
+  return {
+    ok: true,
+    tableId,
+    tableName: String(req.tableName),
+  };
+}
+
 async function ensureTable(req, accessToken) {
   if (req.tableId) {
     return String(req.tableId);
@@ -200,6 +213,33 @@ async function appendRecord(req) {
   };
 }
 
+async function updateRecord(req) {
+  if (!req.recordId) {
+    throw new Error("bitable_requires_record_id");
+  }
+  const accessToken = await getValidAccessToken(req);
+  const tableId = await ensureTable(req, accessToken);
+  await ensureFields(req, accessToken, tableId);
+  const data = await feishuJson(
+    `https://open.feishu.cn/open-apis/bitable/v1/apps/${req.appToken}/tables/${tableId}/records/${req.recordId}`,
+    accessToken,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        fields: req.fields || {},
+      }),
+    },
+  );
+  if (data.code !== 0) {
+    throw new Error(`update_record_failed:${JSON.stringify(data)}`);
+  }
+  return {
+    ok: true,
+    tableId,
+    recordId: data.data?.record?.record_id || String(req.recordId),
+  };
+}
+
 async function listTablesAction(req) {
   const accessToken = await getValidAccessToken(req);
   const items = await listTables(req, accessToken);
@@ -213,6 +253,37 @@ async function listTablesAction(req) {
   };
 }
 
+async function listRecordsAction(req) {
+  const accessToken = await getValidAccessToken(req);
+  const tableId = await ensureTable(req, accessToken);
+  const pageSize = Math.min(Math.max(Number(req.pageSize || 100), 1), 500);
+  const pageToken = String(req.pageToken || "");
+  const url = new URL(
+    `https://open.feishu.cn/open-apis/bitable/v1/apps/${req.appToken}/tables/${tableId}/records`,
+  );
+  url.searchParams.set("page_size", String(pageSize));
+  if (pageToken) {
+    url.searchParams.set("page_token", pageToken);
+  }
+  const data = await feishuJson(url.toString(), accessToken);
+  if (data.code !== 0) {
+    throw new Error(`list_records_failed:${JSON.stringify(data)}`);
+  }
+  return {
+    ok: true,
+    tableId,
+    hasMore: Boolean(data.data?.has_more),
+    pageToken: String(data.data?.page_token || ""),
+    total: Number(data.data?.total || 0),
+    items: (data.data?.items || []).map((item) => ({
+      recordId: String(item.record_id || ""),
+      fields: item.fields || {},
+      createdTime: Number(item.created_time || 0),
+      lastModifiedTime: Number(item.last_modified_time || 0),
+    })),
+  };
+}
+
 async function main() {
   const raw = await readStdin();
   if (!raw) {
@@ -222,8 +293,14 @@ async function main() {
   let result;
   if (req.action === "append_record") {
     result = await appendRecord(req);
+  } else if (req.action === "update_record") {
+    result = await updateRecord(req);
   } else if (req.action === "list_tables") {
     result = await listTablesAction(req);
+  } else if (req.action === "create_table") {
+    result = await createTableAction(req);
+  } else if (req.action === "list_records") {
+    result = await listRecordsAction(req);
   } else {
     throw new Error(`unsupported_action:${req.action || ""}`);
   }

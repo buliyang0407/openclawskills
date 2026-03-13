@@ -17,6 +17,25 @@ Use this skill when the user wants to:
 - receive detailed tweet notifications or periodic AI summary digests
 - optionally archive pushed tweets or summary digests into a Feishu Bitable for later review
 
+## Natural Language Shortcuts
+
+Treat the following Chinese requests as direct monitor-management actions instead of vague chat:
+
+- `删除马斯克的推特信息关注`
+- `取消关注马斯克`
+- `别再看马斯克推特了`
+- `把白宫加到推特监控里`
+- `增加 FoxNews 监控`
+- `去掉 @elonmusk`
+
+Routing rule:
+
+- explicit remove/stop-follow phrases -> run `--remove-account`
+- explicit add/follow/monitor phrases -> run `--add-account`
+- explicit list/status phrases -> run `--show-status` or `--list-accounts`
+
+Do not turn these into abstract discussion unless the identity is actually ambiguous.
+
 ## Canonical Input Rule
 
 Prefer exact X handles as the input:
@@ -126,6 +145,7 @@ The active production setup summarizes only the latest 4 hours, skips nighttime 
 
 - Use SocialData as the only X data source.
 - Deliver notifications through `openclaw message send`.
+- When the user's intent is an explicit add/remove/list action, execute the action first and summarize the result after, rather than debating wording.
 - New accounts must be seeded with the current latest post so historical tweets do not flood the user.
 - Prefer exact handles when adding accounts. Common names are only aliases, not canonical identifiers.
 - Detailed mode keeps original text and adds translation when useful.

@@ -1,0 +1,20 @@
+{
+  "skill_name": "BLY-info-search-executor",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "执行关于 OpenAI Codex 的 query pack，优先找官方文档和官方仓库。",
+      "expected_output": "The executor should use web_search first, then fetch official docs/repo pages, and avoid using DDG unless needed."
+    },
+    {
+      "id": 2,
+      "prompt": "执行关于 nano banana 的 query pack，目标是先确认官方定义。",
+      "expected_output": "The executor should prioritize official or repo/discovery paths and document fetched candidate sources cleanly."
+    },
+    {
+      "id": 3,
+      "prompt": "执行一个日期敏感新闻 query pack，并只保留最值得继续验证的候选来源。",
+      "expected_output": "The executor should run high-value lanes first and fetch a small set of strong candidate pages for verification."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "skill_name": "BLY-info-evidence-pack",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "把一组已经核验过的 Codex 结果整理成可以交给 writer 的证据包。",
+      "expected_output": "A compact evidence pack with grounded facts, usable sources, open questions, and a handoff decision of formal_writing_ok or formal_writing_with_caution."
+    },
+    {
+      "id": 2,
+      "prompt": "把 Nano Banana 这一轮搜索结果整理成证据包，已知没有官方源，媒体命中也弱。",
+      "expected_output": "An evidence pack that clearly states no official source, weak evidence, unresolved identity, and formal_writing_not_recommended."
+    },
+    {
+      "id": 3,
+      "prompt": "把一组国际新闻搜索结果整理给 main，用于做简报但要保留风险提示。",
+      "expected_output": "An evidence pack with verified facts, date-sensitive risk notes, open questions, and a cautionary handoff decision."
+    }
+  ]
+}

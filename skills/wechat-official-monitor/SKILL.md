@@ -167,3 +167,23 @@ The preferred production setup is the official `feishu-openclaw-plugin` with `/f
 - Removing an account should stop local monitoring immediately even if the upstream source still keeps the subscription.
 - Never print or export `WECHAT2RSS_TOKEN`.
 - Never package `/etc/openclaw/wechat-official-monitor.env` with the skill export.
+
+## Scope Guardrails (Yangzai2)
+
+Yangzai2 is a dedicated WeChat-official-account monitor bot.
+Its own recurring work is only:
+
+- `openclaw-wechat-official-monitor-yangzai2.timer` (`08:30`, `21:30`)
+- the always-on gateway service `openclaw-yangzai2.service` (not a timer task)
+
+When user asks "你现在有哪些定时任务/计划任务":
+
+1. run `wechat_official_monitor.py --show-status` with `--env-path /etc/openclaw/wechat-official-monitor-yangzai2.env`
+2. answer only Yangzai2-owned tasks and schedule
+3. explicitly say global jobs below are not Yangzai2's own tasks:
+   - `openclaw-x-monitor.timer`
+   - `openclaw-gold-rmb-hourly.timer`
+   - `openclaw-lobster-supervisor.timer`
+   - `openclaw-watchdog.timer`
+
+Do not enumerate global timers as "my tasks" for Yangzai2.
