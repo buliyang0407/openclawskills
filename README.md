@@ -41,12 +41,17 @@ That prefix makes it easy to distinguish:
 
 ## Current skills
 
+### Main orchestration
+
+- `BLY-main-router`
+  - intent classification and structured dispatch ticket for `main`; routing only, no execution
+
 ### Info and retrieval
 
 - `BLY-info-search-planner`
   - turns vague retrieval requests into structured query packs
 - `BLY-info-search-executor`
-  - prefers `web_search`, then `web_fetch`, with DDG only as fallback
+  - prefers Metaso discovery (if configured), then `web_fetch`, with DDG only as fallback
 - `BLY-info-source-verifier`
   - grades sources by authority and decides whether evidence is strong enough
 - `BLY-info-news-verifier`
@@ -57,8 +62,6 @@ That prefix makes it easy to distinguish:
   - gold quote workflow with RMB conversion and alert-friendly output
 - `x-monitor`
   - X/Twitter account monitoring workflow
-- `wechat-official-monitor`
-  - WeChat monitoring support kept as a manual/non-default capability
 
 ### Knowledge and archive
 
@@ -98,6 +101,7 @@ openclawskills/
 │  ├─ BLY-info-source-verifier/
 │  ├─ BLY-info-news-verifier/
 │  ├─ BLY-info-evidence-pack/
+│  ├─ BLY-main-router/
 │  ├─ general-material-pack/
 │  ├─ feishu-cloud-doc/
 │  ├─ runninghub-image/

@@ -40,7 +40,7 @@ Environment file:
 Canonical script:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py
 ```
 
 ## Main Commands
@@ -48,32 +48,32 @@ python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lob
 Show current supervisor config:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --show-config
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --show-config
 ```
 
 Show live health status:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --show-status
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --show-status
 ```
 
 Run one supervisor pass immediately:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --check-once
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --check-once
 ```
 
 Force one notification for testing:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --check-once --force-notify
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --check-once --force-notify
 ```
 
 Pause or resume the timer:
 
 ```bash
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --pause-watch
-python3 /root/.openclaw-yangzai2/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --resume-watch
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --pause-watch
+python3 /root/.openclaw-rescue/workspace/skills/lobster-supervisor/scripts/lobster_supervisor.py --env-path /etc/openclaw/lobster-supervisor.env --resume-watch
 ```
 
 ## Default Coverage
@@ -82,14 +82,10 @@ The first production version checks:
 
 - `openclaw-watchdog.timer`
 - default OpenClaw gateway port `127.0.0.1:18789`
-- `openclaw-yangzai2.service`
-- `openclaw-wechat-official-monitor-yangzai2.timer`
-- second OpenClaw gateway port `127.0.0.1:19011`
 - `openclaw-yangzai3.service`
 - third OpenClaw gateway port `127.0.0.1:19031`
 - `openclaw-yangzai-admin.service`
 - supervisor OpenClaw gateway port `127.0.0.1:19021`
-- `Wechat2RSS` on `127.0.0.1:18080`
 
 ## Delivery Model
 
@@ -97,7 +93,7 @@ Until a dedicated third Feishu app exists, the supervisor can use an existing bo
 
 Recommended current transport:
 
-- `DELIVERY_PROFILE=yangzai2`
+- `DELIVERY_PROFILE=main`
 - `DELIVERY_CHANNEL=feishu`
 - `DELIVERY_TARGET=<owner open id>`
 

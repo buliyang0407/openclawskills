@@ -15,7 +15,7 @@ DEFAULT_STATE_PATH = Path("/var/lib/openclaw/lobster-supervisor/state.json")
 DEFAULT_WATCH_TIMER = "openclaw-lobster-supervisor.timer"
 DEFAULT_ENV = {
     "SUPERVISOR_NAME": "阳仔一号（主管虾）",
-    "DELIVERY_PROFILE": "yangzai2",
+    "DELIVERY_PROFILE": "main",
     "DELIVERY_CHANNEL": "feishu",
     "AUTOHEAL": "true",
     "ALERT_REMIND_MINUTES": "60",
@@ -192,29 +192,6 @@ def default_targets() -> list[dict[str, Any]]:
             "repairs": [["systemctl", "restart", "openclaw-watchdog.service"]],
         },
         {
-            "id": "yangzai2-service",
-            "kind": "systemd",
-            "label": "阳仔二号 service",
-            "unit": "openclaw-yangzai2.service",
-            "repairs": [["systemctl", "restart", "openclaw-yangzai2.service"]],
-        },
-        {
-            "id": "yangzai2-wechat-timer",
-            "kind": "systemd",
-            "label": "阳仔二号公众号 timer",
-            "unit": "openclaw-wechat-official-monitor-yangzai2.timer",
-            "require_enabled": True,
-            "repairs": [["systemctl", "enable", "--now", "openclaw-wechat-official-monitor-yangzai2.timer"]],
-        },
-        {
-            "id": "yangzai2-gateway",
-            "kind": "tcp",
-            "label": "阳仔二号 gateway",
-            "host": "127.0.0.1",
-            "port": 19011,
-            "repairs": [["systemctl", "restart", "openclaw-yangzai2.service"]],
-        },
-        {
             "id": "yangzai3-service",
             "kind": "systemd",
             "label": "阳仔三号 service",
@@ -243,14 +220,6 @@ def default_targets() -> list[dict[str, Any]]:
             "host": "127.0.0.1",
             "port": 19021,
             "repairs": [["systemctl", "restart", "openclaw-yangzai-admin.service"]],
-        },
-        {
-            "id": "wechat2rss",
-            "kind": "tcp",
-            "label": "Wechat2RSS",
-            "host": "127.0.0.1",
-            "port": 18080,
-            "repairs": [["bash", "-lc", "cd /opt/wechat2rss && docker compose up -d"]],
         },
     ]
 

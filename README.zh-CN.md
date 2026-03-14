@@ -41,12 +41,17 @@
 
 ## 当前包含的技能
 
+### 主管调度层
+
+- `BLY-main-router`
+  - 给 `main` 做意图分类与结构化派工单输出；只路由，不执行
+
 ### 信息检索层
 
 - `BLY-info-search-planner`
   - 把模糊问题拆成结构化检索计划
 - `BLY-info-search-executor`
-  - 执行真实检索，默认优先 `web_search`
+  - 执行真实检索，默认优先 Metaso（若已配置）
 - `BLY-info-source-verifier`
   - 判断来源是否可靠、是否够资格支撑结论
 - `BLY-info-news-verifier`
@@ -57,8 +62,6 @@
   - 金价与汇率相关即时查询
 - `x-monitor`
   - X 账号监控
-- `wechat-official-monitor`
-  - 公众号监控能力，当前更适合手工启用
 
 ### 知识库层
 
@@ -98,6 +101,7 @@ openclawskills/
 │  ├─ BLY-info-source-verifier/
 │  ├─ BLY-info-news-verifier/
 │  ├─ BLY-info-evidence-pack/
+│  ├─ BLY-main-router/
 │  ├─ general-material-pack/
 │  ├─ feishu-cloud-doc/
 │  ├─ runninghub-image/

@@ -1,0 +1,35 @@
+{
+  "skill_name": "BLY-main-router",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "openclaw 最新版本是多少？最近有什么新功能，帮我查一下。",
+      "expected_output": "intent info_query, route [info], needs_latest true, needs_writing false."
+    },
+    {
+      "id": 2,
+      "prompt": "查一下我们之前存过的飞书自动化改造记录，我要看历史决策。",
+      "expected_output": "intent knowledge_query, route [knowledge], needs_history true."
+    },
+    {
+      "id": 3,
+      "prompt": "基于我们库里的资料，再补一点最新公开信息，写一篇 800 字说明。",
+      "expected_output": "intent write_request or mixed_request, route [knowledge, info, writer], needs_latest true, needs_history true, needs_writing true."
+    },
+    {
+      "id": 4,
+      "prompt": "把这篇文章入库：https://mp.weixin.qq.com/s/abc123xyz",
+      "expected_output": "intent article_ingest, route [knowledge], high confidence, hard-rule style classification."
+    },
+    {
+      "id": 5,
+      "prompt": "现在虾群健康状态怎么样，帮我巡检一下。",
+      "expected_output": "intent ops_request, route [rescue], needs_ops true."
+    },
+    {
+      "id": 6,
+      "prompt": "这个先处理一下。",
+      "expected_output": "intent uncertain with smallest safe starter route and low confidence."
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "intent": "uncertain",
+  "route": [
+    "info"
+  ],
+  "needs_latest": false,
+  "needs_history": false,
+  "needs_writing": false,
+  "needs_ops": false,
+  "needs_doc_output": false,
+  "should_fallback_local": false,
+  "confidence": 0.5,
+  "reason": ""
+}

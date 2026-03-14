@@ -1,6 +1,6 @@
 ---
 name: BLY-info-search-executor
-description: Use this skill whenever the info worker must actually execute open-web retrieval after planning queries. Trigger after BLY-info-search-planner produces a query pack, or whenever the user asks for external public information, latest developments, official docs, or source-backed background. Prefer built-in web_search first, then web_fetch for page reading, and use ddg-web-search only as a fallback when the stronger search path is unavailable or weak.
+description: Use this skill whenever the info worker must actually execute open-web retrieval after planning queries. Trigger after BLY-info-search-planner produces a query pack, or whenever the user asks for external public information, latest developments, official docs, or source-backed background. Prefer Metaso search (when configured) for discovery, then web_fetch for page reading, and use ddg-web-search only as a fallback when discovery is unavailable or weak.
 ---
 
 # BLY Info Search Executor
@@ -11,20 +11,21 @@ It turns a query pack into usable candidate sources.
 
 ## Core rule
 
-Use the strongest built-in search path first.
+Use a low-cost and reliable discovery path first.
 
 Default order:
 
-1. `web_search`
+1. `metaso search api` (when configured)
 2. `web_fetch`
 3. `agent-browser` only when page interaction or rendered inspection is needed
 4. `ddg-web-search` only as a fallback
 
 ## Why this order
 
-- `web_search` is better for discovery and relevance than scraping a search-results page manually
+- `metaso` is cost-effective and robust for CN-context discovery
 - `web_fetch` is better for reading candidate pages once you know where to look
 - `ddg-web-search` is useful as a resilient backup, not the preferred primary engine
+- search-engine results are clues; final evidence must still come from official/trusted sources
 
 ## Execution workflow
 
@@ -41,9 +42,9 @@ Given a query pack, run in this order:
 
 Do not waste time on low-value lanes before checking official ones.
 
-### Step 2: Use web_search for discovery
+### Step 2: Use metaso search for discovery
 
-Use `web_search` on the first 2 to 4 highest-value queries.
+Use `metaso search api` on the first 2 to 4 highest-value queries.
 
 What you want from discovery:
 
@@ -75,15 +76,15 @@ Use `agent-browser` only if:
 
 If `web_fetch` gives enough readable text, prefer it.
 
-### Step 5: Fall back to ddg-web-search only if needed
+### Step 5: Fall back to alternate discovery only if needed
 
 Use `ddg-web-search` if:
 
-- `web_search` is unavailable
-- `web_search` returns weak or empty discovery
+- `metaso search api` is unavailable
+- `metaso search api` returns weak or empty discovery
 - you need a second discovery pass from a different route
 
-Treat DDG results as discovery clues, not proof.
+Treat fallback-engine results as discovery clues, not proof.
 
 ## Output format
 
@@ -93,7 +94,7 @@ Return a compact retrieval record:
 executed_queries:
 - lane:
   query:
-  method: web_search / ddg-web-search
+  method: metaso-search / ddg-web-search
 
 candidate_sources:
 - title:
@@ -109,7 +110,7 @@ notes:
 
 Do not:
 
-- start with DDG if web_search is available
+- start with DDG when metaso is available
 - fetch ten weak pages instead of three strong ones
 - confuse search-result snippets with actual evidence
 - use community pages before official pages for entity definition
