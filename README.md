@@ -74,6 +74,12 @@ That prefix makes it easy to distinguish:
 
 ### Writing and delivery
 
+- `BLY-writer-style-young-tech`
+  - voice lock for young, colloquial, tech-leaning Chinese writing
+- `BLY-writer-wechat-longform`
+  - public-account / long-form article drafting workflow with structured output
+- `BLY-writer-illustration-planner`
+  - plans 1-5 inline image slots and RunningHub-ready prompts for long articles
 - `general-material-pack`
   - concise practical material-pack and short-article writing workflow
 - `feishu-cloud-doc`
@@ -102,6 +108,9 @@ openclawskills/
 │  ├─ BLY-info-news-verifier/
 │  ├─ BLY-info-evidence-pack/
 │  ├─ BLY-main-router/
+│  ├─ BLY-writer-style-young-tech/
+│  ├─ BLY-writer-wechat-longform/
+│  ├─ BLY-writer-illustration-planner/
 │  ├─ general-material-pack/
 │  ├─ feishu-cloud-doc/
 │  ├─ runninghub-image/

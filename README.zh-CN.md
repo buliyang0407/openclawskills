@@ -74,6 +74,12 @@
 
 ### 写作与交付层
 
+- `BLY-writer-style-young-tech`
+  - 锁定年轻化、技术宅、口语化的中文文风
+- `BLY-writer-wechat-longform`
+  - 面向公众号/长图文/长文成稿的长写作工作流
+- `BLY-writer-illustration-planner`
+  - 为长文规划 1-5 个配图位与 RunningHub 提示词
 - `general-material-pack`
   - 通用素材包与短文成稿
 - `feishu-cloud-doc`
@@ -102,6 +108,9 @@ openclawskills/
 │  ├─ BLY-info-news-verifier/
 │  ├─ BLY-info-evidence-pack/
 │  ├─ BLY-main-router/
+│  ├─ BLY-writer-style-young-tech/
+│  ├─ BLY-writer-wechat-longform/
+│  ├─ BLY-writer-illustration-planner/
 │  ├─ general-material-pack/
 │  ├─ feishu-cloud-doc/
 │  ├─ runninghub-image/
